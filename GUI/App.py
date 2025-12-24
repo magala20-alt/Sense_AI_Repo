@@ -83,12 +83,11 @@ class ASLTranslatorApp:
         )
         title_label.pack(pady=(0, 10))
          # Video display
-        video_container = tk.Frame(left_frame, bg='#000000', width=800, height=600)
+        video_container = tk.Frame(left_frame, bg='#000000', width=800, height=500)
         video_container.pack(pady=10)
         video_container.pack_propagate(False)
        
-        self.video_frame = tk.Label(video_container, bg='#000000', width=800, height=600)
-        self.video_frame.pack(pady=10)
+        self.video_frame = tk.Label(video_container, bg='#000000', width=800, height=500)
         
         # Controls frame
         controls_container = tk.Frame(left_frame, bg='#1e293b')
