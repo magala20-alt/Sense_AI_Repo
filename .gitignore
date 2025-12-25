@@ -89,4 +89,7 @@ Thumbs.db
 # Local config
 local_settings.py
 
+# mindspore environment
+mindspore-env/
+
 # End of file
