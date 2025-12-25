@@ -1,0 +1,4 @@
+[console_scripts]
+dataset-cache = mindspore.dataset.engine.cache_admin:main
+msrun = mindspore.parallel.cluster.run:main
+

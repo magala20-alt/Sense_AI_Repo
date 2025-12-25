@@ -1,0 +1,140 @@
+# Copyright 2025 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ============================================================================
+"""
+Module for generating Python primitive operator definitions from specifications.
+"""
+import common.gen_utils as gen_utils
+import common.template_utils as template
+from common.op_proto import OpProto
+from op_def_py.base_op_prim_py_generator import BaseOpPrimPyGenerator, generate_py_op_deprecated, _generate_arg_handler
+
+
+class CustomOpPrimPyGenerator(BaseOpPrimPyGenerator):
+    """
+    Generates Python code for primitive operators based on provided specifications.
+    """
+
+    def __init__(self):
+        """
+        Initializes the generator with a template for defining operator primitive classes.
+        """
+        self.op_prim_class_define_template = template.OP_PRIM_CLASS_DEFINE_TEMPLATE
+
+    def generate(self, work_path, module_name, op_protos, doc_dict, file_pre):
+        """
+        Generates Python code for operator primitives and saves it to a file.
+
+        Args:
+            work_path (str): The directory to save the generated files.
+            op_protos (list): A list of operator prototypes.
+            doc_dict (dict): A dictionary containing documentation strings.
+            file_pre (str): The prefix for the generated file names.
+        """
+        gen_py = ""
+        for op_proto in op_protos:
+            if op_proto.op_class.disable:
+                continue
+
+            inputs_args, inputs_default, init_args, args_assign, init_args_with_default, args_handlers = (
+                self._process_args(op_proto))
+
+            # add class description
+            class_desc = self._generate_class_desc(op_proto, inputs_args, init_args, doc_dict)
+
+            # add signature
+            signature_code = self._generate_py_op_signature(op_proto, inputs_args, inputs_default)
+
+            # add deprecated
+            deprecated_code = generate_py_op_deprecated(op_proto.op_deprecated)
+
+            init_method = self._generate_init_code(args_assign, init_args_with_default, op_proto)
+
+            # add __call__ method code
+            call_method = self._generate_call_code(args_handlers, init_args, inputs_args, inputs_default, op_proto)
+
+            class_name = "Custom_" + op_proto.op_name
+            # generate op prim class define
+            op_prim_class_define = self.op_prim_class_define_template.replace(class_name=class_name,
+                                                                              class_desc=class_desc,
+                                                                              signature_code=signature_code,
+                                                                              deprecated_code=deprecated_code,
+                                                                              init_method=init_method,
+                                                                              call_method=call_method)
+            op_prim_class_define += "\n" if call_method.endswith("\n") else ""
+            gen_py += op_prim_class_define
+
+            # add prim_op_object
+            if not init_args:
+                gen_py += f"\n\n{op_proto.op_name}_op={class_name}({module_name}.{op_proto.op_name})\n"
+
+        custom_import_header = f"import {module_name}"
+        res_str = template.PY_LICENSE_STR + \
+                  template.OPS_PY_PRIM_HEADER + custom_import_header + gen_py
+
+        file_name = f"{file_pre}_ops_prim.py"
+        gen_utils.save_file(work_path, file_name, res_str)
+
+    def _generate_init_code(self, args_assign, init_args_with_default, op_proto: OpProto):
+        """
+        Generates the __init__ method code for the operator primitive class.
+
+        Args:
+            args_assign (list): List of argument assignment strings.
+            init_args_with_default (list): List of initialization arguments with default values.
+            op_proto (OpProto): The operator prototype.
+
+        Returns:
+            str: A string containing the __init__ method code.
+        """
+        init_code_str = ""
+        init_code = "\n        self.custom_op_func = op_func"
+        init_code = self._get_init_code(init_code, op_proto)
+        init_code_str += f"    @prim_arg_register\n"
+        init_code_str += f"    def __init__(self, op_func):\n"
+        init_code_str += f"{init_code}\n"
+        init_code_str += f"\n"
+        return init_code_str
+
+    def _get_call_method_body_str(self, args_handlers, init_args, inputs_args, inputs_default, op_proto: OpProto):
+        """
+        Generates the body of the __call__ method.
+
+        Args:
+            args_handlers (dict): Dictionary of argument handlers.
+            init_args (list): List of initialization argument names.
+            inputs_args (list): List of input argument names.
+            inputs_default (dict): Dictionary of default input values.
+            op_proto (OpProto): The operator prototype.
+
+        Returns:
+            str: A string containing the body of the call method.
+        """
+        call_args_list_str = ""
+        if inputs_args:
+            args_with_handler = []
+            for arg in inputs_args:
+                if arg in args_handlers:
+                    is_optional = inputs_default.get(arg) == "None"
+                    args_with_handler.append(
+                        _generate_arg_handler(op_proto.op_class.name, arg, args_handlers[arg], is_optional))
+                else:
+                    args_with_handler.append(arg)
+            call_args_list_str += ", ".join(args_with_handler)
+        if init_args:
+            call_args_list_str += ", "
+            call_args_list_str += ", ".join([f'self.{arg}' for arg in init_args])
+
+        call_method_body_str = f"\n        return self.custom_op_func({call_args_list_str})"
+        return call_method_body_str

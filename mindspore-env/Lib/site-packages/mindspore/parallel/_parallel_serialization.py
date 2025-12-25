@@ -1,0 +1,661 @@
+# Copyright 2023 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ============================================================================
+"""parallel serialization"""
+from __future__ import absolute_import
+
+import os
+import json
+import numpy as np
+import mindspore as ms
+from mindspore import _checkparam as Validator
+from mindspore.parallel._tensor import _get_tensor_strategy, _construct_from_to_tensor_layout, \
+    _get_needed_rank_list_by_layouts, _get_needed_rank_transform_operator_map_by_layouts, \
+    _generate_transform_operator_stack, _apply_tensor_transform_operators, _construct_tensor_layout_for_opt_shard, \
+    _extract_layout_item
+
+MAX_PATH_LENGTH = 1024
+
+
+def _convert_to_list(strategy, rank_id=None):
+    """Convert ParallelLayouts object to specified list."""
+    train_map = {}
+    for param_name in strategy.keys():
+        try:
+            layout = strategy.get(param_name)
+            dev_mat = list(layout.dev_matrix[0].dim)
+            # for layout one axis two slices, layout(("dp", "mp"), "None")
+            if len(layout.tensor_map) > 1:
+                tensor_map = [list(tensor_map.dim) for tensor_map in layout.tensor_map
+                              if list(tensor_map.dim)]
+            else:
+                tensor_map = list(layout.tensor_map[0].dim)
+            param_split_shape = list(layout.param_split_shape[0].dim)
+            field_size = int(layout.field)
+            shard_stride = int(layout.opt_weight_shard_step)
+            shard_size = int(layout.opt_weight_shard_size)
+            pipeline_stage = 0
+            origin_param_name = param_name
+            if "-" in param_name:
+                pipeline_stage, origin_param_name = param_name.split("-")
+                pipeline_stage = int(pipeline_stage)
+            if origin_param_name not in train_map:
+                train_map[origin_param_name] = [dev_mat, tensor_map, param_split_shape, field_size,
+                                                shard_stride, shard_size,
+                                                [pipeline_stage]]
+            else:
+                update_pipeline_stage_list = train_map.get(origin_param_name)[6] + [pipeline_stage]
+                if rank_id is not None:
+                    stage_device_num = np.prod(dev_mat)
+                    is_device0_and_pipeline0 = ((rank_id // stage_device_num) == 0) and (pipeline_stage == 0)
+                    not_device0_nor_pipeline0 = ((rank_id // stage_device_num) > 0) and (pipeline_stage > 0)
+                    if is_device0_and_pipeline0 or not_device0_nor_pipeline0:
+                        train_map[origin_param_name] = [dev_mat, tensor_map, param_split_shape,
+                                                        field_size, shard_stride,
+                                                        shard_size, update_pipeline_stage_list]
+                    else:
+                        train_map.get(origin_param_name)[6] = update_pipeline_stage_list
+                else:
+                    if np.all(pipeline_stage <= np.array(update_pipeline_stage_list)):
+                        train_map[origin_param_name] = [dev_mat, tensor_map, param_split_shape,
+                                                        field_size, shard_stride,
+                                                        shard_size, update_pipeline_stage_list]
+                    else:
+                        train_map.get(origin_param_name)[6] = update_pipeline_stage_list
+        except BaseException as e:
+            raise ValueError(f"{e.__str__()}. Convert layout strategy to list "
+                             f"failed, please make sure that strategy matches the node_strategy.proto, you can "
+                             f"check whether 'train_strategy_filename' is correct.") from e
+    return train_map
+
+
+def _convert_to_layout(param_name, tensor_layout):
+    """Convert list to ParallelLayouts object."""
+    strategy = {}
+    try:
+        layout = ms.train.node_strategy_pb2.ParallelLayouts()
+        layout.field = tensor_layout[3]
+
+        dev_matrix = layout.dev_matrix.add()
+        for item in tensor_layout[0]:
+            dev_matrix.dim.append(item)
+
+        tensor_map = layout.tensor_map.add()
+        for item in tensor_layout[1]:
+            tensor_map.dim.append(item)
+
+        param_split_shape = layout.param_split_shape.add()
+        for item in tensor_layout[2]:
+            param_split_shape.dim.append(item)
+    except BaseException as e:
+        raise ValueError(f"{e.__str__()}. For 'load_distributed_checkpoint', convert list to layout strategy failed, "
+                         f"you can check whether your input list is correct.") from e
+
+    strategy[param_name] = layout
+    return strategy
+
+
+def _check_strategy_file(strategy_filename):
+    """load parallel strategy file"""
+    if not isinstance(strategy_filename, str):
+        raise TypeError(f"For 'build_searched_strategy', the argument 'strategy_filename' should be string, "
+                        f"but got {type(strategy_filename)}.")
+
+    if not os.path.isfile(strategy_filename):
+        raise ValueError(f"For 'build_searched_strategy', no such strategy file: {strategy_filename}. "
+                         f"Please check whether the 'strategy_filename' exists.")
+
+    if os.path.getsize(strategy_filename) == 0:
+        raise ValueError(f"For 'build_searched_strategy', the strategy file {strategy_filename} should not "
+                         f"be empty. Please check whether the 'strategy_filename' is correct.")
+
+
+def _load_protobuf_strategy(strategy_filename, strategy_set=None):
+    """load strategy from protobuf file"""
+    parallel_strategy_map = ms.train.node_strategy_pb2.ParallelStrategyMap()
+    with open(strategy_filename, 'rb') as f:
+        pb_content = f.read()
+        if strategy_set is not None:
+            if pb_content in strategy_set:
+                return {}
+            strategy_set.add(pb_content)
+    try:
+        parallel_strategy_map.ParseFromString(pb_content)
+    except BaseException as e:
+        raise TypeError("The strategy file type should be one of json or protobuf. "
+                        "When the file name extension is not '.json', "
+                        "the file is considered as a protobuf file.") from e
+    return parallel_strategy_map
+
+
+def _build_protobuf_strategy(strategy_filename):
+    """build strategy from protobuf file"""
+    parallel_strategy_map = _load_protobuf_strategy(strategy_filename)
+    layout_items = parallel_strategy_map.parallel_layout_item
+    if not layout_items:
+        return {}
+
+    strategy = {}
+    for layout_item in layout_items:
+        parameter_name = layout_item.param_name
+        layout = layout_item.parallel_layouts
+        strategy[parameter_name] = layout
+    return strategy
+
+
+def _build_json_strategy(strategy_filename):
+    """build strategy from json file"""
+    with open(strategy_filename, 'r') as f:
+        json_content = json.load(f)
+    if "parallel_layout_item" not in json_content:
+        return {}
+    layout_items = json_content.get("parallel_layout_item")
+    strategy = {}
+    for parameter_name, layout_item in layout_items.items():
+        layout = ms.train.node_strategy_pb2.ParallelLayouts()
+        layout.field = layout_item.get("field")
+        layout.opt_weight_shard_size = layout_item.get("opt_weight_shard_size")
+        layout.opt_weight_shard_step = layout_item.get("opt_weight_shard_step")
+        dev_matrix = layout.dev_matrix.add()
+        for item in layout_item.get("dev_matrix"):
+            dev_matrix.dim.append(item)
+        tensor_map = layout.tensor_map.add()
+        for item in layout_item.get("tensor_map"):
+            tensor_map.dim.append(item)
+        param_split_shape = layout.param_split_shape.add()
+        if "param_split_shape" in layout_item:
+            for item in layout_item.get("param_split_shape"):
+                param_split_shape.dim.append(item)
+        indices_offset = layout.indices_offset.add()
+        if "indices_offset" in layout_item:
+            for item in layout_item.get("indices_offset"):
+                indices_offset.dim.append(item)
+        strategy[parameter_name] = layout
+    return strategy
+
+
+def _build_searched_strategy(strategy_filename):
+    """build searched strategy"""
+    if strategy_filename is None:
+        return strategy_filename
+    _check_strategy_file(strategy_filename)
+    if strategy_filename[-5:] != ".json":
+        return _build_protobuf_strategy(strategy_filename)
+    return _build_json_strategy(strategy_filename)
+
+
+def _merge_protobuf_strategy(src_strategy_files, dst_strategy_file):
+    """merge protobuf strategy"""
+    dst_parallel_strategy_map = ms.train.node_strategy_pb2.ParallelStrategyMap()
+    merged_stage = []
+    strategy_set = set()
+    for src_strategy_file in src_strategy_files:
+        src_parallel_strategy_map = _load_protobuf_strategy(src_strategy_file, strategy_set=strategy_set)
+        if not src_parallel_strategy_map:
+            continue
+        strategy_items = src_parallel_strategy_map.parallel_strategy_item
+        layout_items = src_parallel_strategy_map.parallel_layout_item
+        if not strategy_items or not layout_items:
+            raise ValueError("The strategy file {} is empty".format(src_strategy_file))
+        pipeline_stage = strategy_items[0].parallel_strategys.stage
+        if pipeline_stage in merged_stage:
+            continue
+        for layout_item in layout_items:
+            layout_item.param_name = "-".join([str(pipeline_stage), layout_item.param_name])
+        dst_parallel_strategy_map.parallel_strategy_item.extend(strategy_items)
+        dst_parallel_strategy_map.parallel_layout_item.extend(layout_items)
+        merged_stage.append(pipeline_stage)
+    dst_parallel_strategy_map.current_stage = 1
+    with open(dst_strategy_file, "wb") as f:
+        f.write(dst_parallel_strategy_map.SerializeToString())
+
+
+def _merge_json_strategy(src_strategy_files, dst_strategy_file):
+    """merge protobuf strategy"""
+    dst_parallel_strategy_map = {"current_stage": 1, "parallel_strategy_item": {}, "parallel_layout_item": {}}
+    merged_stage = []
+    for src_strategy_file in src_strategy_files:
+        with open(src_strategy_file, 'r') as f:
+            json_content = json.load(f)
+        layout_items = json_content.get("parallel_layout_item")
+        strategy_items = json_content.get("parallel_strategy_item")
+        if not strategy_items or not layout_items:
+            raise ValueError("The strategy file {} is empty".format(src_strategy_file))
+        pipeline_stage = strategy_items.get(list(strategy_items.keys())[0]).get('stage')
+        if pipeline_stage in merged_stage:
+            continue
+        for param_name, layout_item in layout_items.items():
+            new_layout_item = {}
+            new_param_name = "-".join([str(pipeline_stage), param_name])
+            new_layout_item[new_param_name] = layout_item
+            dst_parallel_strategy_map.get("parallel_layout_item").update(new_layout_item)
+        dst_parallel_strategy_map.get("parallel_strategy_item").update(strategy_items)
+        merged_stage.append(pipeline_stage)
+    with open(dst_strategy_file, "w") as f:
+        json.dump(dst_parallel_strategy_map, f)
+
+
+def _parameter_not_in_local_stage(param_name, origin_strategy_list, strategy_list):
+    """parameter whether in the local stage"""
+    if origin_strategy_list is None or strategy_list is None:
+        return True
+    return param_name in origin_strategy_list and param_name not in strategy_list
+
+
+def _extract_layout_map(strategy_file, rank_id=None):
+    """Extract layout map"""
+    layout_map = None
+    if strategy_file is not None:
+        if not isinstance(strategy_file, dict):
+            src_strategy = _build_searched_strategy(strategy_file)
+        else:
+            src_strategy = strategy_file
+        layout_map = _convert_to_list(src_strategy, rank_id)
+    return layout_map
+
+
+def _extract_pipeline_stage_num(strategy_file):
+    """extract pipeline stage num"""
+    pipeline_stage_num = 1
+    if strategy_file is not None:
+        if not isinstance(strategy_file, dict):
+            src_strategy = _build_searched_strategy(strategy_file)
+        else:
+            src_strategy = strategy_file
+        layout_map = _convert_to_list(src_strategy)
+        pipeline_stage_set = set()
+        for _, layout in layout_map.items():
+            pipeline_stage_set.update(layout[6])
+        pipeline_stage_num = len(pipeline_stage_set)
+        if list(pipeline_stage_set) != list(range(pipeline_stage_num)):
+            raise ValueError("The strategy file for pipeline parallel does not contains all stages.")
+    return pipeline_stage_num
+
+
+def _extract_src_dst_layout_map_by_src(src_strategy_file=None, dst_strategy_file=None):
+    """Extract strategy list by src strategy"""
+    src_layout_map = _extract_layout_map(src_strategy_file)
+    dst_layout_map = _extract_layout_map(dst_strategy_file)
+    if dst_layout_map is None:
+        return src_layout_map, dst_layout_map
+    for param_name in list(dst_layout_map.keys()):
+        if param_name in src_layout_map.keys():
+            continue
+        dst_layout_map.pop(param_name)
+    stage_id = 0
+    if src_strategy_file[-5:] == ".json":
+        with open(src_strategy_file, 'r') as f:
+            json_content = json.load(f)
+        strategy_items = json_content.get("parallel_strategy_item")
+        if not strategy_items:
+            raise ValueError("The strategy file {} if empty.".format(src_strategy_file))
+        stage_id = strategy_items.get(list(strategy_items.keys())[0]).get('stage')
+    else:
+        src_parallel_strategy_map = _load_protobuf_strategy(src_strategy_file)
+        strategy_items = src_parallel_strategy_map.parallel_strategy_item
+        if not strategy_items:
+            raise ValueError("The strategy file {} if empty.".format(src_strategy_file))
+        stage_id = strategy_items[0].parallel_strategys.stage
+    return src_layout_map, dst_layout_map, stage_id
+
+
+def _extract_src_dst_layout_map(rank_id, src_strategy_file=None, dst_strategy_file=None):
+    """Extract strategy list"""
+    src_layout_map = _extract_layout_map(src_strategy_file, None)
+    dst_layout_map = _extract_layout_map(dst_strategy_file, rank_id)
+    if dst_layout_map is None:
+        return src_layout_map, dst_layout_map
+    dst_stage_device_num = np.prod(dst_layout_map.get(list(dst_layout_map.keys())[0])[0])
+    dst_stage_id = rank_id // dst_stage_device_num
+    # cut the source and destination layout, remain the parameter in the dst_stage
+    for param_name in list(dst_layout_map.keys()):
+        if dst_stage_id in dst_layout_map.get(param_name)[6]:
+            continue
+        dst_layout_map.pop(param_name)
+        if src_layout_map is not None and param_name in src_layout_map:
+            src_layout_map.pop(param_name)
+    return src_layout_map, dst_layout_map
+
+
+def _restore_group_info_list(group_info_file_name):
+    """restore group info"""
+    parallel_group_map = ms.train.node_strategy_pb2.ParallelGroupMap()
+
+    with open(group_info_file_name, 'rb') as f:
+        pb_content = f.read()
+    parallel_group_map.ParseFromString(pb_content)
+
+    restore_list = parallel_group_map.ckpt_restore_rank_list
+    if not restore_list:
+        raise ValueError("For 'restore_group_info_list', the group information file has no restore rank list.")
+
+    return [rank for rank in restore_list.dim]
+
+
+def _get_device_num_from_strategy(strategy_file=None):
+    """Get device num from strategy file"""
+    if strategy_file is None:
+        return 1
+    if not isinstance(strategy_file, dict):
+        src_strategy = _build_searched_strategy(strategy_file)
+    else:
+        src_strategy = strategy_file
+    strategy_list = _convert_to_list(src_strategy)
+    device_mat = list(strategy_list.values())[0][0]
+    if not device_mat:
+        raise ValueError("The parallel strategy file only contains pipeline-parallelism, which is not supported for "
+                         "parallel strategy conversion now.")
+    return np.prod(device_mat)
+
+
+def _rank_list_for_transform_parallel_checkpoint(rank_id, src_strategy_list, dst_strategy_list):
+    """
+    Get the needed rank list for transform model parallel dim of checkpoint.
+    """
+    result_list = set()
+    handled_layout = []
+    for param_name, _ in src_strategy_list.items():
+        if dst_strategy_list is not None and param_name not in dst_strategy_list:
+            continue
+        from_dev_matrix, from_tensor_map, from_opt_shard_step, from_opt_shard_size = _extract_layout_item(
+            src_strategy_list.get(param_name))
+        from_device_num = np.prod(from_dev_matrix)
+        to_dev_matrix = [1]
+        to_tensor_map = [-1] * len(from_tensor_map)
+        to_opt_shard_step = 0
+        to_opt_shard_size = 0
+        if dst_strategy_list is not None:
+            to_dev_matrix, to_tensor_map, to_opt_shard_step, to_opt_shard_size = _extract_layout_item(
+                dst_strategy_list.get(param_name))
+        to_device_num = np.prod(to_dev_matrix)
+        fake_tensor_shape = [max(from_device_num, to_device_num)] * len(from_tensor_map)
+        handled_key = (from_dev_matrix, from_tensor_map, from_opt_shard_step, from_opt_shard_size,
+                       to_dev_matrix, to_tensor_map, to_opt_shard_step, to_opt_shard_size)
+        if handled_key in handled_layout:
+            continue
+        handled_layout.append(handled_key)
+        param_strategy = _get_tensor_strategy(from_dev_matrix, from_tensor_map)
+        origin_tensor_shape = ()
+        for i, item in enumerate(fake_tensor_shape):
+            if i == 0 and from_opt_shard_size > 0:
+                origin_tensor_shape += (item * param_strategy[i] * from_opt_shard_size,)
+                continue
+            origin_tensor_shape += (item * param_strategy[i],)
+
+        from_dev_matrix, from_tensor_map, from_full_tensor_shape = _construct_tensor_layout_for_opt_shard(
+            from_dev_matrix, from_tensor_map, from_opt_shard_step, from_opt_shard_size, origin_tensor_shape)
+        to_dev_matrix, to_tensor_map, to_full_tensor_shape = _construct_tensor_layout_for_opt_shard(
+            to_dev_matrix, to_tensor_map, to_opt_shard_step, to_opt_shard_size, origin_tensor_shape)
+        # Convert tensor layout to same device num
+        from_tensor_layout, to_tensor_layout = _construct_from_to_tensor_layout(from_full_tensor_shape, from_dev_matrix,
+                                                                                from_tensor_map, to_full_tensor_shape,
+                                                                                to_dev_matrix, to_tensor_map)
+        device_list = list(range(0, np.prod(from_tensor_layout[0])))
+        param_rank_list = _get_needed_rank_list_by_layouts(from_tensor_layout, to_tensor_layout, device_list, rank_id)
+        param_rank_list_new = [rank % from_device_num for rank in param_rank_list]
+        param_rank_set_new = set(param_rank_list_new)
+        result_list.update(param_rank_set_new)
+    return list(result_list)
+
+
+def _transform_parallel_checkpoint(rank_id, param_total_dict, param_attr_dict, src_strategy_list,
+                                   dst_strategy_list, param_type_dict):
+    """
+    Transform model parallel dimension for distributed checkpoint files.
+    """
+    transform_param_dict = {}
+    device_num = -1
+    for param_name, _ in param_total_dict.items():
+        tensor_shape = list(param_total_dict[param_name].values())[0].shape
+        from_dev_matrix = [1]
+        from_tensor_map = [-1] * len(tensor_shape)
+        from_opt_shard_step = 0
+        from_opt_shard_size = 0
+        if src_strategy_list is not None:
+            if param_name not in src_strategy_list:
+                ms.log.info("The parameter {} is not in src_strategy.".format(param_name))
+                continue
+            from_dev_matrix, from_tensor_map, from_opt_shard_step, from_opt_shard_size = _extract_layout_item(
+                src_strategy_list.get(param_name))
+        to_dev_matrix_origin = [1]
+        to_tensor_map_origin = [-1] * len(tensor_shape)
+        to_opt_shard_step = 0
+        to_opt_shard_size = 0
+        if dst_strategy_list is not None:
+            if param_name not in dst_strategy_list:
+                ms.log.info("The parameter {} is not in dst_strategy.".format(param_name))
+                continue
+            to_dev_matrix_origin, to_tensor_map_origin, to_opt_shard_step, to_opt_shard_size = _extract_layout_item(
+                dst_strategy_list.get(param_name))
+        # Add optimizer sharding dim for tensor layout
+        device_num = np.prod(from_dev_matrix)
+        param_strategy = _get_tensor_strategy(from_dev_matrix, from_tensor_map)
+        origin_tensor_shape = ()
+        for i, item in enumerate(tensor_shape):
+            if i == 0 and from_opt_shard_size > 0:
+                origin_tensor_shape += (item * param_strategy[i] * from_opt_shard_size,)
+                continue
+            origin_tensor_shape += (item * param_strategy[i],)
+
+        has_layout_from = any(isinstance(i, (list, tuple)) for i in from_tensor_map)
+        has_layout_to = any(isinstance(i, (list, tuple)) for i in to_tensor_map_origin)
+
+        from_dev_matrix, from_tensor_map, from_full_tensor_shape = _construct_tensor_layout_for_opt_shard(
+            from_dev_matrix, from_tensor_map, from_opt_shard_step, from_opt_shard_size, origin_tensor_shape)
+        to_dev_matrix, to_tensor_map, to_full_tensor_shape = _construct_tensor_layout_for_opt_shard(
+            to_dev_matrix_origin, to_tensor_map_origin, to_opt_shard_step, to_opt_shard_size, origin_tensor_shape)
+        # Convert tensor layout to same device num
+        from_tensor_layout, to_tensor_layout = _construct_from_to_tensor_layout(from_full_tensor_shape, from_dev_matrix,
+                                                                                from_tensor_map, to_full_tensor_shape,
+                                                                                to_dev_matrix, to_tensor_map)
+
+        # when the from_layout is less devices, the checkpoint_map for map[device_num] should using map[0]
+        device_list = list(range(0, np.prod(from_tensor_layout[0])))
+        if rank_id % device_num not in param_attr_dict[param_name]:
+            raise ValueError("The checkpoint of rank {} is missing.".format(rank_id % device_num))
+        param_rank_map = _get_needed_rank_transform_operator_map_by_layouts(from_tensor_layout, to_tensor_layout,
+                                                                            device_list, rank_id)
+
+        from_info_tuple = (from_opt_shard_size, from_dev_matrix, from_tensor_map, from_full_tensor_shape)
+        to_info_tuple = (to_opt_shard_size, to_dev_matrix_origin, to_tensor_map_origin, origin_tensor_shape)
+        _insert_opt_shard_reshape(param_rank_map, from_info_tuple, to_info_tuple)
+        _insert_expand_layout_reshape(param_rank_map, from_info_tuple, to_info_tuple, has_layout_from, has_layout_to)
+        transform_operator_stack = _generate_transform_operator_stack(param_rank_map, rank_id)
+        param_total_dict_copy = param_total_dict[param_name].copy()
+        _apply_tensor_transform_operators(transform_operator_stack, param_total_dict_copy, device_num)
+        transform_tensor = ms.Tensor(param_total_dict_copy[rank_id % device_num])
+        requires_grad = param_attr_dict[param_name][rank_id % device_num][0]
+        layerwise_parallel = param_attr_dict[param_name][rank_id % device_num][1]
+        transform_param = ms.Parameter(transform_tensor, param_name, requires_grad, layerwise_parallel)
+        if param_type_dict[param_name][rank_id % device_num] == "BFloat16":
+            transform_param.set_dtype(ms.bfloat16)
+        transform_param_dict[param_name] = transform_param
+    if device_num < 1:
+        raise ValueError("None of the parameters in checkpoint file are in either src strategy or "
+                         "dst strategy. Please check correctness of strategy files.")
+
+    # Handle those parameter like learning_rate, global_step which not in strategy_file.
+    for param_name, _ in param_total_dict.items():
+        if param_name not in transform_param_dict:
+            transform_param = ms.Parameter(
+                ms.Tensor(param_total_dict[param_name][rank_id % device_num]), param_name,
+                param_attr_dict[param_name][rank_id % device_num][0],
+                param_attr_dict[param_name][rank_id % device_num][1])
+            if param_type_dict[param_name][rank_id % device_num] == "BFloat16":
+                transform_param.set_dtype(ms.bfloat16)
+            transform_param_dict[param_name] = transform_param
+
+    transform_param_list = [{"name": param_name, "data": param_data}
+                            for param_name, param_data in transform_param_dict.items()]
+    return transform_param_list
+
+
+def _make_dir(path, arg_name):
+    """Make directory."""
+    if not isinstance(path, str):
+        ms.log.critical("The %s is invalid, the type should be string.", arg_name)
+        raise TypeError("The {} is invalid, the type should be string.".format(arg_name))
+    if path.strip() == "":
+        ms.log.critical("The %s is invalid, it should be non-blank.", arg_name)
+        raise ValueError("The {} is invalid, it should be non-blank.".format(arg_name))
+
+    path = os.path.realpath(path)
+
+    if len(path) > MAX_PATH_LENGTH:
+        ms.log.critical("The %s length is too long, it should be limited in %s.", arg_name, MAX_PATH_LENGTH)
+        raise ValueError("The {} length is too long, it should be limited in {}.".format(arg_name, MAX_PATH_LENGTH))
+
+    ms.log.debug("The abs path is %r", path)
+
+    if os.path.exists(path):
+        if not os.path.isdir(path):
+            ms.log.critical("The path(%r) is a file path, it should be a directory path.", path)
+            raise NotADirectoryError("The path({}) is a file path, it should be a directory path.".format(path))
+        real_path = path
+    else:
+        ms.log.debug("The directory(%s) doesn't exist, will create it", path)
+        try:
+            os.makedirs(path, mode=0o700, exist_ok=True)
+            real_path = path
+        except PermissionError as e:
+            ms.log.critical("No write permission on the directory(%r), error = %r", path, e)
+            raise TypeError("No write permission on the directory.") from e
+        finally:
+            pass
+    return real_path
+
+
+def _insert_opt_shard_reshape(param_rank_map, from_info_tuple, to_info_tuple):
+    """insert opt_shard op reshape"""
+    from_opt_shard_size = from_info_tuple[0]
+    from_dev_matrix = from_info_tuple[1]
+    from_tensor_map = from_info_tuple[2]
+    from_full_tensor_shape = from_info_tuple[3]
+    to_opt_shard_size = to_info_tuple[0]
+    to_dev_matrix_origin = to_info_tuple[1]
+    to_tensor_map_origin = to_info_tuple[2]
+    origin_tensor_shape = to_info_tuple[3]
+    for param_rank, _ in param_rank_map.items():
+        if from_opt_shard_size > 0:
+            from_tensor_strategy = _get_tensor_strategy(from_dev_matrix, from_tensor_map)
+            from_slice_tensor_shape = ()
+            for i, item in enumerate(from_full_tensor_shape):
+                from_slice_tensor_shape += (item // from_tensor_strategy[i],)
+            param_rank_map.get(param_rank).insert(0, ('Reshape', list(from_slice_tensor_shape)))
+        if to_opt_shard_size > 0:
+            to_tensor_strategy = _get_tensor_strategy(to_dev_matrix_origin, to_tensor_map_origin)
+            to_slice_tensor_shape = ()
+            for i, item in enumerate(origin_tensor_shape):
+                if i == 0 and to_opt_shard_size > 0:
+                    to_slice_tensor_shape += (item // (to_tensor_strategy[i] * to_opt_shard_size),)
+                    continue
+                to_slice_tensor_shape += (item // to_tensor_strategy[i],)
+            param_rank_map.get(param_rank).append(('Reshape', list(to_slice_tensor_shape)))
+
+
+def _insert_expand_layout_reshape(param_rank_map, from_info_tuple, to_info_tuple,
+                                  insert_from_reshape, insert_to_reshape):
+    """ insert layout expand op reshape """
+    from_opt_shard_size = from_info_tuple[0]
+    from_dev_matrix = from_info_tuple[1]
+    from_tensor_map = from_info_tuple[2]
+    from_full_tensor_shape = from_info_tuple[3]
+    to_opt_shard_size = to_info_tuple[0]
+    to_dev_matrix_origin = to_info_tuple[1]
+    to_tensor_map_origin = to_info_tuple[2]
+    origin_tensor_shape = to_info_tuple[3]
+    for param_rank, _ in param_rank_map.items():
+        if from_opt_shard_size == 0 and insert_from_reshape:
+            from_slice_tensor_shape = ()
+            from_tensor_strategy = _get_tensor_strategy(from_dev_matrix, from_tensor_map)
+            for i, item in enumerate(from_full_tensor_shape):
+                from_slice_tensor_shape += (item // from_tensor_strategy[i],)
+            param_rank_map.get(param_rank).insert(0, ('Reshape', list(from_slice_tensor_shape)))
+        if to_opt_shard_size == 0 and insert_to_reshape:
+            to_tensor_strategy = _get_tensor_strategy(to_dev_matrix_origin, to_tensor_map_origin)
+            to_slice_tensor_shape = ()
+            for i, item in enumerate(origin_tensor_shape):
+                to_slice_tensor_shape += (item // to_tensor_strategy[i],)
+            param_rank_map.get(param_rank).append(('Reshape', list(to_slice_tensor_shape)))
+
+
+def _get_param_list_when_first_dim_sharded(device_arrangement, first_dim_sharded_device_index, rank):
+    """Calculate rank list for optimizer parallel when first dim of parameter is sharded by other parallel method"""
+    total_device_num = 1
+    for n in device_arrangement:
+        total_device_num *= n
+    if first_dim_sharded_device_index != len(device_arrangement) - 1:
+        return list(range(0, total_device_num))
+    first_dim_sharded_size = device_arrangement[-1 - first_dim_sharded_device_index]
+    range_size = total_device_num // first_dim_sharded_size
+    offset = rank % range_size
+    start = rank - offset
+    param_total_list = list(range(start, start + range_size))
+    return param_total_list
+
+
+def _gather_tasks_load_dis(unified_safetensors_dir, predict_strategy, network, dst_safetensors_dir, dst_device_num,
+                           output_format, name_map, return_param_dict):
+    """gather transform tasks"""
+    tasks = []
+    for rank in range(0, dst_device_num):
+        tasks.append(
+            (unified_safetensors_dir, predict_strategy, network, dst_safetensors_dir, rank, output_format, name_map,
+             return_param_dict))
+    return tasks
+
+
+def _check_checkpoint_file(checkpoint_filenames):
+    """Check checkpoint file name."""
+    for index, filename in enumerate(checkpoint_filenames):
+        if not isinstance(filename, str) or not os.path.exists(filename) \
+                or filename[-5:] != ".ckpt" or os.path.getsize(filename) == 0:
+            raise ValueError(f"For 'load_distributed_checkpoint', please check 'checkpoint_filenames', and "
+                             f"make sure the {filename} at index {index} is a valid checkpoint file, it must "
+                             f"be a string ending with '.ckpt', and the checkpoint file it represents must "
+                             f"be exist and not empty.")
+
+
+def _check_predict_strategy(predict_strategy):
+    """Check predict strategy."""
+
+    def _check_int_list(arg):
+        if not isinstance(arg, list):
+            return False
+        for item in arg:
+            if not isinstance(item, int):
+                return False
+        return True
+
+    if predict_strategy is None:
+        return
+
+    flag = True
+    predict_strategy = Validator.check_isinstance("predict_strategy", predict_strategy, dict)
+    for key in predict_strategy.keys():
+        if not isinstance(key, str) or not isinstance(predict_strategy[key], (list, tuple)) \
+                or len(predict_strategy[key]) < 4:
+            flag = False
+        dev_matrix, tensor_map, param_split_shape, field_size = predict_strategy[key][:4]
+        if not _check_int_list(dev_matrix) or not _check_int_list(tensor_map) or \
+                not (_check_int_list(param_split_shape) or not param_split_shape) or \
+                not (isinstance(field_size, int) and field_size == 0):
+            flag = False
+
+    if not flag:
+        raise ValueError(f"For 'load_distributed_checkpoint', the argument 'predict_strategy' is dict, "
+                         f"the key of it must be string, and the value of it must be list or tuple that "
+                         f"the first four elements must be dev_matrix (list[int]), tensor_map (list[int]), "
+                         f"param_split_shape (list[int]) and field_size (int, which value is 0)."
+                         f"Please check whether 'predict_strategy' is correct.")
