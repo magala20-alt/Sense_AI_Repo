@@ -170,8 +170,8 @@ for batch in train_ds.create_dict_iterator():
 
 # confirm class label mapping
 dataset = WLASLDualStreamDataset(
-    "preprocessing/train/frames",
-    "preprocessing/train/pose"
+    "WLASL/train/frames",
+    "WLASL/train/pose"
 )
 
 print("Number of classes:", len(dataset.label_map))
