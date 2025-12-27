@@ -136,8 +136,47 @@ def create_dual_stream_dataset(frames_root, pose_root, batch_size=4, shuffle=Tru
     return ds.batch(batch_size)
 
 train_ds = create_dual_stream_dataset(
+    "dataset/preprocessing/train/frames",
+    "dataset/preprocessing/train/pose"
+)
+
+# test data loading
+print("Number of samples:", train_ds.get_dataset_size())
+
+# inspect one batch
+for batch in train_ds.create_dict_iterator():
+    print("RGB shape:", batch["rgb"].shape)
+    print("Pose shape:", batch["pose"].shape)
+    print("Labels:", batch["label"])
+    break
+
+# visual check
+import matplotlib.pyplot as plt
+
+for batch in train_ds.create_dict_iterator():
+    rgb = batch["rgb"][0]
+    pose = batch["pose"][0]
+
+    plt.subplot(1, 2, 1)
+    plt.imshow(rgb[0])
+    plt.title("RGB Frame")
+
+    plt.subplot(1, 2, 2)
+    plt.imshow(pose[0])
+    plt.title("Pose Frame")
+
+    plt.show()
+    break
+
+# confirm class label mapping
+dataset = WLASLDualStreamDataset(
     "preprocessing/train/frames",
     "preprocessing/train/pose"
 )
+
+print("Number of classes:", len(dataset.label_map))
+print("Example label map:", list(dataset.label_map.items())[:5])
+
+
 
 
