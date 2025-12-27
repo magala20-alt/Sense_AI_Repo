@@ -136,8 +136,8 @@ def create_dual_stream_dataset(frames_root, pose_root, batch_size=4, shuffle=Tru
     return ds.batch(batch_size)
 
 train_ds = create_dual_stream_dataset(
-    "dataset/preprocessing/train/frames",
-    "dataset/preprocessing/train/pose"
+    "dataset/WLASL/train/frames",
+    "dataset/WLASL/train/pose"
 )
 
 # test data loading
@@ -170,8 +170,8 @@ for batch in train_ds.create_dict_iterator():
 
 # confirm class label mapping
 dataset = WLASLDualStreamDataset(
-    "WLASL/train/frames",
-    "WLASL/train/pose"
+    "dataset/WLASL/train/frames",
+    "dataset/WLASL/train/pose"
 )
 
 print("Number of classes:", len(dataset.label_map))
