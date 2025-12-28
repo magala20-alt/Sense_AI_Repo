@@ -54,14 +54,28 @@ class WLASLDualStreamDataset:
             frames.append(frames[-1])
 
         return np.array(frames, dtype=np.float32)
-
+    
     def __getitem__(self, idx):
         frames_path, pose_path, label = self.samples[idx]
 
         rgb_seq = self._load_sequence(frames_path)
         pose_seq = self._load_sequence(pose_path)
 
-        return rgb_seq, pose_seq, label
+        return rgb_seq, pose_seq, np.int32(label)
+
+
+    # def __getitem__(self, idx):
+    #     frames_path, pose_path, label = self.samples[idx]
+
+    #     rgb_seq = self._load_sequence(frames_path)
+    #     pose_seq = self._load_sequence(pose_path)
+
+    #     return {
+    #         "rgb": rgb_seq,
+    #         "pose": pose_seq,
+    #         "label": label
+    #         }
+ #rgb_seq, pose_seq, label
     
 def create_dual_stream_dataset(frames_root, pose_root, batch_size=4, shuffle=True):
     ds = GeneratorDataset(

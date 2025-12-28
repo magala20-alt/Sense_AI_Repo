@@ -5,7 +5,7 @@ class FrameEncoder(nn.Cell):
     def __init__(self, backbone):
         super().__init__()
         self.backbone = backbone
-        self.pool = nn.GlobalAvgPooling()
+        self.pool = nn.AdaptiveAvgPool2d((1, 1)) #nn.GlobalAvgPooling()
 
     def construct(self, x):
         B, T, H, W, C = x.shape
