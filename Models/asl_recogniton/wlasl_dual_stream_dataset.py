@@ -2,73 +2,9 @@ import os
 import cv2
 import numpy as np
 from mindspore.dataset import GeneratorDataset
+import mindspore.nn as nn
+from mindspore import ops
 
-# class WLASLFramesDataset:
-#     def __init__(self, root_dir, max_frames=30, img_size=224):
-#         self.samples = []
-#         self.max_frames = max_frames
-#         self.img_size = img_size
-#         self.label_map = {}
-
-#         classes = sorted(os.listdir(root_dir))
-
-#         for label, cls in enumerate(classes):
-#             class_path = os.path.join(root_dir, cls)
-
-#             if not os.path.isdir(class_path):
-#                 continue
-
-#             self.label_map[cls] = label
-
-#             # Each subfolder = one signer/sample
-#             for signer_folder in os.listdir(class_path):
-#                 signer_path = os.path.join(class_path, signer_folder)
-
-#                 if os.path.isdir(signer_path):
-#                     self.samples.append((signer_path, label))
-
-#     def __len__(self):
-#         return len(self.samples)
-
-#     def _load_frames(self, sample_dir):
-#         frame_files = sorted(os.listdir(sample_dir))
-#         frames = []
-
-#         for f in frame_files[:self.max_frames]:
-#             img_path = os.path.join(sample_dir, f)
-#             img = cv2.imread(img_path)
-#             if img is None:
-#                 continue
-
-#             img = cv2.resize(img, (self.img_size, self.img_size))
-#             img = img.astype(np.float32) / 255.0
-#             frames.append(img)
-
-#         if len(frames) == 0:
-#             frames = [np.zeros((self.img_size, self.img_size, 3), dtype=np.float32)]
-
-#         while len(frames) < self.max_frames:
-#             frames.append(frames[-1])
-
-#         return np.array(frames, dtype=np.float32)
-
-#     def __getitem__(self, idx):
-#         path, label = self.samples[idx]
-#         frames = self._load_frames(path)
-#         return frames, label
-
-
-# def create_dataset(root, batch_size=8, shuffle=True):
-#     ds = GeneratorDataset(
-#         source=WLASLFramesDataset(root),
-#         column_names=["frames", "label"],
-#         shuffle=shuffle
-#     )
-#     return ds.batch(batch_size)
-
-# train_ds = create_dataset("preprocessing/train/frames")
-# val_ds = create_dataset("preprocessing/val/frames")
-# test_ds = create_dataset("preprocessing/test/frames")
 
 class WLASLDualStreamDataset:
     def __init__(self, frames_root, pose_root, max_frames=30, img_size=224):
