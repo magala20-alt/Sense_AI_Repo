@@ -1,16 +1,18 @@
 import tkinter as tk
 from tkinter import ttk, filedialog
 import cv2
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageDraw
 import threading
 import numpy as np
+#import pyttsx3  # For text-to-speech
+#import speech_recognition as sr  # For speech recognition
 
 class ASLTranslatorApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("ASL Translator with Facial Features")
-        self.root.geometry("1400x900")
-        self.root.configure(bg='#1e293b')
+        self.root.title("Sense.AI - ASL Translator")
+        self.root.geometry("1600x900")
+        #self.root.configure(bg='#1e293b')
         
         # Initialize models (placeholder for now)
         self.baseline_model = None  # Will be: ASLTranslator("models/baseline/model.ckpt")
@@ -26,32 +28,50 @@ class ASLTranslatorApp:
 
      
     def setup_ui(self):
+        # Get screen dimensions for gradient
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
         
-        # Create scrollable canvas
-        self.canvas = tk.Canvas(self.root, bg='#1e293b', highlightthickness=0)
+        # Create gradient background
+        gradient_img = self.create_horizontal_gradient(
+            screen_width, 
+            screen_height,
+            "#7F0BB5",  # Dark blue-gray (left)
+            "#29298C",  # Purple (middle) 
+            "#1e293b"   # Dark blue-gray (right)
+        )
+        
+        # Create background canvas for gradient
+        self.bg_canvas = tk.Canvas(self.root, highlightthickness=0)
+        self.bg_canvas.pack(fill='both', expand=True)
+        
+        # Display gradient
+        self.gradient_photo = ImageTk.PhotoImage(gradient_img)
+        self.bg_canvas.create_image(0, 0, image=self.gradient_photo, anchor='nw')
+        
+        # Create scrollable canvas ON TOP of gradient
+        self.canvas = tk.Canvas(self.bg_canvas, bg='#29298C', highlightthickness=0)
         scrollbar = tk.Scrollbar(self.root, orient="vertical", command=self.canvas.yview)
         
-        # Scrollable frame
-        self.scrollable_frame = tk.Frame(self.canvas, bg='#1e293b')
+        # Scrollable frame - match the base color
+        self.scrollable_frame = tk.Frame(self.canvas, bg='#29298C')
         
         self.scrollable_frame.bind(
             "<Configure>",
             lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         )
         
-        # IMPORTANT: Create window with proper width
+        # Create window with proper width
         self.canvas_window = self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
         
-        # Bind canvas width changes to update the window width
+        # Bind canvas width changes
         def configure_canvas_window(event):
-            # Set the width of the window to match the canvas width
             self.canvas.itemconfig(self.canvas_window, width=event.width)
         
         self.canvas.bind('<Configure>', configure_canvas_window)
-        
         self.canvas.configure(yscrollcommand=scrollbar.set)
         
-        # Pack scrollbar and canvas - ORDER MATTERS
+        # Pack scrollbar and canvas
         scrollbar.pack(side="right", fill="y")
         self.canvas.pack(side="left", fill="both", expand=True)
         
@@ -59,46 +79,29 @@ class ASLTranslatorApp:
         def _on_mousewheel(event):
             self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
         
-        # For Windows and MacOS
         self.canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        
-        # For Linux
         self.canvas.bind_all("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
         self.canvas.bind_all("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))
         
-        # Main container (inside scrollable frame)
-        main_frame = tk.Frame(self.scrollable_frame, bg='#1e293b')
+        # Main container - use matching background
+        main_frame = tk.Frame(self.scrollable_frame, bg='#29298C')
         main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
         # Left side - Video and controls
-        left_frame = tk.Frame(main_frame, bg='#1e293b')
+        left_frame = tk.Frame(main_frame, bg='#29298C')
         left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
         
-        # Title
-        title_label = tk.Label(
-            left_frame,
-            text="Sense.AI",
-            font=('Arial', 32, 'bold'),
-            fg='#ffffff',
-            bg='#1e293b'
-        )
-        title_label.pack(pady=(0, 10))
-         # Video display
-        video_container = tk.Frame(left_frame, bg='#000000', width=800, height=500)
-        video_container.pack(pady=10)
-        video_container.pack_propagate(False)
-       
-        self.video_frame = tk.Label(video_container, bg='#000000', width=800, height=500)
-        
         # Controls frame
-        controls_container = tk.Frame(left_frame, bg='#1e293b')
+        controls_container = tk.Frame(left_frame, bg='#29298C')
         controls_container.pack(fill=tk.X)
-        controls_frame = tk.Frame(controls_container, bg='#334155', relief=tk.RAISED, bd=2)
+        controls_frame = tk.Frame(controls_container, bg='#29298C', relief=tk.RAISED, bd=2)
         controls_frame.pack(fill=tk.X, pady=10)
         
         # Buttons
-        btn_frame = tk.Frame(controls_frame, bg='#334155')
+        btn_frame = tk.Frame(controls_frame, bg='#29298C')
         btn_frame.pack(pady=15)
         
+       
         self.start_btn = tk.Button(
             btn_frame,
             text="▶ Start Recognition",
@@ -141,13 +144,14 @@ class ASLTranslatorApp:
             cursor='hand2'
         )
         upload_btn.pack(side=tk.LEFT, padx=5)
-        
+         
+         # Comparison checkbox
         self.compare_var = tk.BooleanVar()
         compare_check = tk.Checkbutton(
             btn_frame,
             text="Compare Models",
             variable=self.compare_var,
-            bg='#334155',
+            bg='#29298C',
             fg='white',
             font=('Arial', 11),
             selectcolor='#8b5cf6',
@@ -156,11 +160,36 @@ class ASLTranslatorApp:
         )
         compare_check.pack(side=tk.LEFT, padx=20)
         
-        # Translation display
+        # Microphone button for speech input
+        self.mic_btn = tk.Button(
+            btn_frame,
+            text="🎤 Voice Input",
+            command=self.toggle_microphone,
+            bg='#2196F3',
+            fg='white',
+            font=('Arial', 12, 'bold'),
+            padx=20,
+            pady=10,
+            relief=tk.FLAT,
+            cursor='hand2'
+        )
+        self.mic_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Status indicator for listening
+        self.mic_status = tk.Label(
+            btn_frame,
+            text="off",
+            bg='#334155',
+            fg='#4CAF50',
+            font=('Arial', 10, 'bold')
+        )
+        self.mic_status.pack(side=tk.LEFT, padx=10)
+
+         # Translation display
         translation_frame = tk.LabelFrame(
             left_frame,
             text="Translation",
-            bg='#334155',
+            bg='#29298C',
             fg='white',
             font=('Arial', 14, 'bold'),
             relief=tk.RAISED,
@@ -171,30 +200,29 @@ class ASLTranslatorApp:
         self.translation_label = tk.Label(
             translation_frame,
             text="Ready to translate...",
-            font=('Arial', 48, 'bold'),
+            font=('Arial', 16, 'bold'),
             fg='#a78bfa',
-            bg='#334155',
+            bg='#29298C',
             pady=30
         )
         self.translation_label.pack()
-        
-        self.confidence_label = tk.Label(
-            translation_frame,
-            text="Confidence: --",
-            font=('Arial', 14),
-            fg='#cbd5e1',
-            bg='#334155'
-        )
-        self.confidence_label.pack()
-        
-        # Comparison display (hidden by default)
+         
+        # Video display
+        video_container = tk.Frame(left_frame, bg='#000000', width=800, height=500)
+        video_container.pack(pady=10)
+        video_container.pack_propagate(False)
+    
+        self.video_frame = tk.Label(video_container, bg='#000000', width=800, height=500)
+        self.video_frame.pack()
+
+        # Comparison display
         self.comparison_frame = tk.Frame(translation_frame, bg='#334155')
         
-        comp_left = tk.Frame(self.comparison_frame, bg='#475569', relief=tk.RAISED, bd=1)
+        comp_left = tk.Frame(self.comparison_frame, bg='#29298C', relief=tk.RAISED, bd=1)
         comp_left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=10)
         
         tk.Label(comp_left, text="Baseline (Hands Only)", bg='#475569', fg='#94a3b8', font=('Arial', 10)).pack(pady=5)
-        self.baseline_result = tk.Label(comp_left, text="--", bg='#475569', fg='white', font=('Arial', 24, 'bold'))
+        self.baseline_result = tk.Label(comp_left, text="--", bg='#475569', fg='white', font=('Arial', 16, 'bold'))
         self.baseline_result.pack(pady=10)
         tk.Label(comp_left, text="Accuracy: 72%", bg='#475569', fg='#94a3b8', font=('Arial', 9)).pack()
         
@@ -202,12 +230,35 @@ class ASLTranslatorApp:
         comp_right.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=10)
         
         tk.Label(comp_right, text="Enhanced (+ Facial)", bg='#7c3aed', fg='#ddd6fe', font=('Arial', 10)).pack(pady=5)
-        self.enhanced_result = tk.Label(comp_right, text="--", bg='#7c3aed', fg='white', font=('Arial', 24, 'bold'))
+        self.enhanced_result = tk.Label(comp_right, text="--", bg='#7c3aed', fg='white', font=('Arial', 16, 'bold'))
         self.enhanced_result.pack(pady=10)
         tk.Label(comp_right, text="Accuracy: 87%", bg='#7c3aed', fg='#ddd6fe', font=('Arial', 9)).pack()
-        
+        # Speak button - converts translation to speech
+        self.speak_btn = tk.Button(
+            translation_frame,
+            text="🔊 Speak Translation",
+            command=self.speak_translation,
+            bg="#10A524",
+            fg="#FFFFFF",
+            font=('Arial', 11, 'bold'),
+            padx=10,
+            pady=5,
+            relief=tk.FLAT,
+            cursor='hand2',
+            state=tk.DISABLED  # Enabled when there's text to speak
+        )
+        self.speak_btn.pack(side=tk.RIGHT, padx=5)
+        self.confidence_label = tk.Label(
+            translation_frame,
+            text="Confidence: --",
+            font=('Arial', 14),
+            fg="#ffffff",
+            bg='#29298C',
+            pady=10
+        )
+        self.confidence_label.pack()
         # Right side - Facial features
-        right_frame = tk.Frame(main_frame, bg='#1e293b', width=350)
+        right_frame = tk.Frame(main_frame, bg='#29298C', width=450)
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=(10, 0))
         right_frame.pack_propagate(False)
         
@@ -215,7 +266,7 @@ class ASLTranslatorApp:
         features_frame = tk.LabelFrame(
             right_frame,
             text="Detected Facial Features",
-            bg='#334155',
+            bg='#29298C',
             fg='white',
             font=('Arial', 12, 'bold'),
             relief=tk.RAISED,
@@ -277,7 +328,7 @@ class ASLTranslatorApp:
             row.pack(fill=tk.X, padx=10, pady=5)
             tk.Label(row, text=label, bg='#334155', fg='#94a3b8', font=('Arial', 10)).pack(side=tk.LEFT)
             tk.Label(row, text=value, bg='#334155', fg='white', font=('Arial', 10, 'bold')).pack(side=tk.RIGHT)
-    
+            
     def start_recording(self):
         self.is_recording = True
         self.start_btn.config(state=tk.DISABLED)
@@ -314,6 +365,13 @@ class ASLTranslatorApp:
             
             # Schedule next frame
             self.root.after(33, self.update_frame)  # ~30 FPS
+    def speak_translation(self):
+        """Convert the current translation text to speech"""
+        pass
+
+    def toggle_microphone(self):
+        """Toggle microphone listening for speech input"""
+        pass
 
     def process_frame(self, frame):
         """Process the frame to extract features and perform recognition"""
@@ -432,6 +490,49 @@ class ASLTranslatorApp:
         # Start processing frames
         self.update_frame()
 
+    # other utilities as needed
+    def hex_to_rgb(self, hex_color):
+        """Convert hex color to RGB tuple"""
+        hex_color = hex_color.lstrip('#')
+        return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+
+    def create_horizontal_gradient(self, width, height, color1, color2, color3):
+        """
+        Create a horizontal gradient with 3 colors
+        Transitions: color1 -> color2 -> color3
+        """
+        img = Image.new('RGB', (width, height))
+        draw = img.load()
+        
+        # Convert hex to RGB
+        rgb1 = self.hex_to_rgb(color1)
+        rgb2 = self.hex_to_rgb(color2)
+        rgb3 = self.hex_to_rgb(color3)
+
+        # Split into two segments
+        mid_point = width // 2
+        
+        # First half: color1 to color2
+        for x in range(mid_point):
+            ratio = x / mid_point
+            r = int(rgb1[0] * (1 - ratio) + rgb2[0] * ratio)
+            g = int(rgb1[1] * (1 - ratio) + rgb2[1] * ratio)
+            b = int(rgb1[2] * (1 - ratio) + rgb2[2] * ratio)
+            
+            for y in range(height):
+                draw[x, y] = (r, g, b)
+        
+        # Second half: color2 to color3
+        for x in range(mid_point, width):
+            ratio = (x - mid_point) / (width - mid_point)
+            r = int(rgb2[0] * (1 - ratio) + rgb3[0] * ratio)
+            g = int(rgb2[1] * (1 - ratio) + rgb3[1] * ratio)
+            b = int(rgb2[2] * (1 - ratio) + rgb3[2] * ratio)
+            
+            for y in range(height):
+                draw[x, y] = (r, g, b)
+        
+        return img
 if __name__ == "__main__":
     root = tk.Tk()
     app = ASLTranslatorApp(root) 
