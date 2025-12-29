@@ -4,21 +4,22 @@ from mindspore import Model
 from mindspore.train.callback import LossMonitor, TimeMonitor
 
 # from asl_recogniton.wlasl_dual_stream_dataset import WLASLDualStreamDataset
-from asl_recogniton.wlasl_dual_stream_dataset import create_dual_stream_dataset
-from asl_recogniton.dual_stream_temporal_asl import DualStreamTemporalASL
-from asl_recogniton.simple_cnn import SimpleCNN
+from asl_recognition.wlasl_dual_stream_dataset import create_dual_stream_dataset
+from asl_recognition.dual_stream_with_loss import DualStreamWithLoss
+from asl_recognition.dual_stream_temporal_asl import DualStreamTemporalASL
+from asl_recognition.simple_cnn import SimpleCNN
 
 
 train_ds = create_dual_stream_dataset(
     "dataset/WLASL/train/frames",
     "dataset/WLASL/train/pose",
-    batch_size=4
+    batch_size=1
 )
 
 val_ds = create_dual_stream_dataset(
     "dataset/WLASL/val/frames",
     "dataset/WLASL/val/pose",
-    batch_size=4,
+    batch_size=1,
     shuffle=False
 )
 
@@ -33,8 +34,8 @@ for batch in train_ds.create_dict_iterator():
     break
 
 
-rgb_backbone = SimpleCNN(out_channels=512)
-pose_backbone = SimpleCNN(out_channels=512)
+rgb_backbone = SimpleCNN(out_channels=256)
+pose_backbone = SimpleCNN(out_channels=256 )
 
 model = DualStreamTemporalASL(
     rgb_backbone=rgb_backbone,
@@ -45,14 +46,16 @@ model = DualStreamTemporalASL(
 loss_fn = nn.SoftmaxCrossEntropyWithLogits(sparse=True)
 optimizer = nn.Adam(model.trainable_params(), learning_rate=1e-4)
 
+net_with_loss = DualStreamWithLoss(model, loss_fn)
+
 train_small_ds = train_ds.take(8).repeat(1)
 val_small_ds = val_ds.take(2).repeat(1)
 
 net = Model(
-    network=model,
-    loss_fn=loss_fn,
-    optimizer=optimizer,
-    metrics={"acc"}
+    network=net_with_loss,
+    # loss_fn=loss_fn,
+    optimizer=optimizer
+    # metrics={"acc"}
 )
 # net = Model(
 #     network=model,
@@ -64,9 +67,16 @@ net = Model(
 
 
 net.train(
-    epoch=20,
+    epoch=2,
     train_dataset=train_small_ds,
     # valid_dataset=val_small_ds,
     callbacks=[LossMonitor(), TimeMonitor()],
     dataset_sink_mode=False
 )
+
+# Freeze encoders to save memory
+for p in model.rgb_encoder.get_parameters():
+    p.requires_grad = False
+for p in model.pose_encoder.get_parameters():
+    p.requires_grad = False
+

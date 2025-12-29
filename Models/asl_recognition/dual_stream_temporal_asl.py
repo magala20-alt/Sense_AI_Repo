@@ -12,7 +12,7 @@ class DualStreamTemporalASL(nn.Cell):
         self.rgb_encoder = FrameEncoder(rgb_backbone)
         self.pose_encoder = FrameEncoder(pose_backbone)
 
-        self.temporal = TemporalCNN(in_channels=1024)
+        self.temporal = TemporalCNN(in_channels=512)
         self.classifier = nn.Dense(256, num_classes)
 
     def construct(self, rgb, pose):

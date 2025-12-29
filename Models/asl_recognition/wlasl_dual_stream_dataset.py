@@ -7,7 +7,7 @@ from mindspore import ops
 
 
 class WLASLDualStreamDataset:
-    def __init__(self, frames_root, pose_root, max_frames=30, img_size=224):
+    def __init__(self, frames_root, pose_root, max_frames=16, img_size=112):
         self.samples = []
         self.max_frames = max_frames
         self.img_size = img_size
@@ -77,11 +77,12 @@ class WLASLDualStreamDataset:
     #         }
  #rgb_seq, pose_seq, label
     
-def create_dual_stream_dataset(frames_root, pose_root, batch_size=4, shuffle=True):
+def create_dual_stream_dataset(frames_root, pose_root, batch_size=1, shuffle=True):
     ds = GeneratorDataset(
         source=WLASLDualStreamDataset(frames_root, pose_root),
         column_names=["rgb", "pose", "label"],
-        shuffle=shuffle
+        shuffle=shuffle,
+        num_parallel_workers=1
     )
     return ds.batch(batch_size)
 
