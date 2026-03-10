@@ -1,76 +1,74 @@
-# components/sidebar.py — left icon sidebar
+# components/sidebar.py
 
 import tkinter as tk
 from theme import COLORS, FONTS
 
 
 class Sidebar(tk.Frame):
-    """
-    Left column, width=52, full height, navy bg.
-    Args: parent, role ("signer"|"speaker"), on_logout (callable)
-    - Vertical role label using Canvas.create_text with angle=90
-      color: teal for signer, gold for speaker
-    - 3 icon buttons (32x32 tk.Button, relief FLAT):
-      icons depend on role:
-        signer:  ["📷", "⚙️", "📋"]
-        speaker: ["⌨️", "🎤", "📋"]
-      first button is active (teal/gold bg), rest are dark translucent
-    - Bottom: "Out" button (danger red bg, white text, width=40)
-    """
+  """Desktop navigation sidebar matching the wider mockups."""
 
-    def __init__(self, parent, role="signer", on_logout=None):
-        super().__init__(parent, bg=COLORS["navy"], width=52)
-        self.pack_propagate(False)
-        self.pack(side=tk.LEFT, fill=tk.Y)
+  def __init__(self, parent, active_screen, navigate, role="signer", on_logout=None):
+    super().__init__(parent, bg=COLORS["navy"], width=262)
+    self.pack_propagate(False)
+    self.navigate = navigate
+    self.active_screen = active_screen
+    self.role = role
+    self.on_logout = on_logout or (lambda: None)
 
-        self.role = role
-        self.on_logout = on_logout or (lambda: None)
+    accent = COLORS["teal"] if role == "signer" else COLORS["gold"]
 
-        # Role label canvas (rotated text)
-        role_canvas = tk.Canvas(self, bg=COLORS["navy"], highlightthickness=0, width=52, height=80)
-        role_canvas.pack(side=tk.TOP, pady=12)
+    header = tk.Frame(self, bg=COLORS["navy"], height=86)
+    header.pack(fill=tk.X)
+    header.pack_propagate(False)
+    tk.Label(header, text="🤟", font=("Helvetica", 22), bg=COLORS["navy"], fg=COLORS["gold_lt"]).pack(side=tk.LEFT, padx=(28, 12), pady=22)
+    tk.Label(header, text="Sense.AI", font=("Georgia", 20, "bold"), bg=COLORS["navy"], fg=COLORS["white"]).pack(side=tk.LEFT, pady=24)
 
-        role_text = "SIGNER" if role == "signer" else "SPEAKER"
-        role_color = COLORS["teal"] if role == "signer" else COLORS["gold"]
-        role_canvas.create_text(26, 40, text=role_text, font=FONTS["label"], fill=role_color, angle=90)
+    sections = [
+      ("MAIN", [
+        ("signer", "🤟", "Translate (Signer)"),
+        ("speaker", "🗣️", "Speak (Speaker)"),
+      ]),
+      ("MANAGE", [
+        ("history", "💬", "History"),
+        ("settings", "⚙️", "Settings"),
+      ]),
+      ("ACCOUNT", [
+        ("session", "🔄", "Switch Role"),
+      ]),
+    ]
 
-        # Icon buttons container
-        icons_frame = tk.Frame(self, bg=COLORS["navy"])
-        icons_frame.pack(side=tk.TOP, pady=8)
+    for title, items in sections:
+      tk.Label(self, text=title, font=("Helvetica", 10, "bold"), bg=COLORS["navy"], fg="#5f6c8b").pack(anchor="w", padx=24, pady=(18, 8))
+      for screen_name, icon, label in items:
+        self._nav_button(screen_name, icon, label, accent)
 
-        signer_icons = ["📷", "⚙️", "📋"]
-        speaker_icons = ["⌨️", "🎤", "📋"]
-        icons = signer_icons if role == "signer" else speaker_icons
-        active_color = COLORS["teal"] if role == "signer" else COLORS["gold"]
+    tk.Frame(self, bg=COLORS["navy"]).pack(fill=tk.BOTH, expand=True)
 
-        for i, icon in enumerate(icons):
-            btn = tk.Button(
-                icons_frame,
-                text=icon,
-                font=("Helvetica", 16),
-                bg=active_color if i == 0 else COLORS["navy_dark"],
-                fg=COLORS["white"],
-                relief=tk.FLAT,
-                width=3,
-                height=1,
-                cursor="hand2" if i == 0 else "arrow"
-            )
-            btn.pack(pady=4)
+    footer = tk.Frame(self, bg=COLORS["navy"], height=72)
+    footer.pack(fill=tk.X, side=tk.BOTTOM)
+    footer.pack_propagate(False)
+    avatar = tk.Label(footer, text="🤟", font=("Helvetica", 18), bg=COLORS["white"], fg=COLORS["gold"], width=2)
+    avatar.pack(side=tk.LEFT, padx=(18, 10), pady=16)
+    info = tk.Frame(footer, bg=COLORS["navy"])
+    info.pack(side=tk.LEFT, pady=14)
+    tk.Label(info, text="Maya Johnson", font=("Helvetica", 12, "bold"), bg=COLORS["navy"], fg=COLORS["white"]).pack(anchor="w")
+    tk.Label(info, text=role.capitalize(), font=("Helvetica", 10), bg=COLORS["navy"], fg=accent).pack(anchor="w")
+    tk.Button(footer, text="⎋", font=("Helvetica", 12), bg=COLORS["navy"], fg="#8b97b2", relief=tk.FLAT, bd=0, cursor="hand2", command=self.on_logout).pack(side=tk.RIGHT, padx=18)
 
-        # Spacer to push logout button to bottom
-        tk.Frame(self, bg=COLORS["navy"]).pack(side=tk.TOP, expand=True, fill=tk.BOTH)
+  def _nav_button(self, screen_name, icon, label, accent):
+    is_active = screen_name == self.active_screen
+    bg = "#15516e" if is_active else COLORS["navy"]
+    fg = COLORS["white"] if is_active else "#c3cadb"
+    row = tk.Frame(self, bg=bg, height=48)
+    row.pack(fill=tk.X, padx=12, pady=4)
+    row.pack_propagate(False)
+    tk.Label(row, text=icon, font=("Helvetica", 16), bg=bg, fg=accent if is_active else "#8b97b2").pack(side=tk.LEFT, padx=(18, 12))
+    tk.Label(row, text=label, font=("Helvetica", 12, "bold"), bg=bg, fg=fg).pack(side=tk.LEFT)
 
-        # Logout button at bottom
-        logout_btn = tk.Button(
-            self,
-            text="Out",
-            font=FONTS["body_bold"],
-            bg=COLORS["danger"],
-            fg=COLORS["white"],
-            relief=tk.FLAT,
-            width=4,
-            height=2,
-            cursor="hand2",
-            command=self.on_logout
-        )
-        logout_btn.pack(side=tk.BOTTOM, pady=8)
+    def handle_click(_event=None):
+      self.navigate(screen_name)
+
+    for widget in (row,):
+      widget.bind("<Button-1>", handle_click)
+    for child in row.winfo_children():
+      child.bind("<Button-1>", handle_click)

@@ -5,12 +5,13 @@ from app_state import AppState
 from theme import COLORS, APP_WIDTH, APP_HEIGHT
 
 # Import all screens
-from screens.welcome_screen import WelcomeScreen
 from screens.login_screen import LoginScreen
 from screens.signup_screen import SignUpScreen
 from screens.session_screen import SessionScreen
 from screens.signer_screen import SignerScreen
 from screens.speaker_screen import SpeakerScreen
+from screens.history_screen import HistoryScreen
+from screens.settings_screen import SettingsScreen
 
 
 class SenseAIApp(tk.Tk):
@@ -22,7 +23,7 @@ class SenseAIApp(tk.Tk):
         # Window setup
         self.title("Sense.AI")
         self.geometry(f"{APP_WIDTH}x{APP_HEIGHT}")
-        self.resizable(False, False)
+        self.resizable(True, True)
         self.configure(bg=COLORS["cream"])
         
         # Center window on screen
@@ -39,19 +40,19 @@ class SenseAIApp(tk.Tk):
         # Frame stack for screen management
         self.frames = {}
         self._build_screens()
-        
-        # Show welcome screen first
-        self.show_screen("welcome")
+        # Show login screen first
+        self.show_screen("login")
 
     def _build_screens(self):
         """Instantiate all screens and lay them on top of each other."""
         screen_classes = [
-            WelcomeScreen,
             LoginScreen,
             SignUpScreen,
             SessionScreen,
             SignerScreen,
             SpeakerScreen,
+            HistoryScreen,
+            SettingsScreen,
         ]
         
         for ScreenClass in screen_classes:
