@@ -2,7 +2,9 @@
 
 import tkinter as tk
 import re
+from pathlib import Path
 
+from PIL import Image, ImageTk
 from components.status_bar import StatusBar
 from theme import COLORS, FONTS
 
@@ -18,6 +20,8 @@ class SignUpScreen(tk.Frame):
         self.state = state
         self.navigate = navigate
         self._layout_mode = None
+        self._header_source_image = None
+        self._header_photo = None
 
         # Responsive layout logic
         self.bind('<Configure>', self._on_resize)
@@ -25,6 +29,29 @@ class SignUpScreen(tk.Frame):
         # Main container
         self.container = tk.Frame(self, bg=COLORS["cream"])
         self.container.pack(fill=tk.BOTH, expand=True)
+
+        self.header = tk.Frame(self.container, bg=COLORS["navy"], height=160)
+        self.header.pack_propagate(False)
+        self.header_bg_label = tk.Label(self.header, bg=COLORS["navy"], bd=0)
+        self.header_bg_label.place(x=0, y=0, relwidth=1, relheight=1)
+        self.header_title = tk.Label(
+            self.header,
+            text="Sense.AI",
+            font=("Georgia", 36, "bold"),
+            bg=COLORS["navy"],
+            fg=COLORS["white"],
+        )
+        self.header_title.place(x=28, y=24, anchor="nw")
+        self.header_subtitle = tk.Label(
+            self.header,
+            text="Translate (Signer) · Speak (Speaker)",
+            font=("Helvetica", 14),
+            bg=COLORS["navy"],
+            fg=COLORS["teal"],
+        )
+        self.header_subtitle.place(x=28, y=80, anchor="nw")
+        self._load_header_image()
+        self.header.bind("<Configure>", self._update_header_image)
 
         # Card
         self.card = tk.Frame(self.container, bg=COLORS["white"], bd=0, relief=tk.FLAT, highlightbackground=COLORS["border"], highlightthickness=1)
@@ -103,6 +130,8 @@ class SignUpScreen(tk.Frame):
         width = max(self.winfo_width(), self.winfo_reqwidth())
         mode = "desktop" if width >= 800 else "mobile"
         if mode == self._layout_mode:
+            if mode == "desktop":
+                self._update_desktop_split()
             return
 
         self._layout_mode = mode
@@ -110,9 +139,35 @@ class SignUpScreen(tk.Frame):
             widget.pack_forget()
 
         if mode == "desktop":
-            self.card.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(160, 32), pady=32)
+            self.header.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, pady=32)
+            self.card.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 32), pady=32)
+            self._update_desktop_split()
         else:
+            self.header.pack(side=tk.TOP, fill=tk.X)
             self.card.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=16, pady=(0, 16))
+
+    def _update_desktop_split(self):
+        container_width = max(self.container.winfo_width(), self.container.winfo_reqwidth(), 1)
+        self.header.configure(width=int(container_width * (2 / 3)))
+
+    def _load_header_image(self):
+        asset_path = Path(__file__).resolve().parent.parent / "assets" / "darkNavy_bg.webp"
+        try:
+            self._header_source_image = Image.open(asset_path)
+            self._update_header_image()
+        except Exception:
+            self._header_source_image = None
+
+    def _update_header_image(self, _event=None):
+        if self._header_source_image is None:
+            return
+
+        width = max(self.header.winfo_width(), 1)
+        height = max(self.header.winfo_height(), 1)
+        resample = getattr(Image, "Resampling", Image).LANCZOS
+        resized = self._header_source_image.resize((width, height), resample)
+        self._header_photo = ImageTk.PhotoImage(resized)
+        self.header_bg_label.config(image=self._header_photo)
 
     def _on_resize(self, event):
         self._apply_layout()

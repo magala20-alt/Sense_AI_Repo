@@ -29,6 +29,8 @@ class SessionScreen(tk.Frame):
         self._layout_mode = None
         self._join_dialog = None
         self._join_entry = None
+        self._selected_role = None
+        self._role_cards = {}
 
         self.bind("<Configure>", self._on_resize)
 
@@ -65,7 +67,7 @@ class SessionScreen(tk.Frame):
         self.backtologin = tk.Label(
             self.content,
             text="← Back to login",
-            font=("Helvetica", 11),
+            font=("Helvetica", 15, "bold"),
             fg="#007e9b",
             bg=COLORS["cream"],
             cursor="hand2",
@@ -96,7 +98,7 @@ class SessionScreen(tk.Frame):
 
         self.subtitle = tk.Label(
             self.content,
-            text="You can switch roles anytime from Settings",
+            text="Pick a role to get started — you can switch roles anytime from Settings",
             font=("Helvetica", 12),
             fg="#96a0b2",
             bg=COLORS["cream"],
@@ -110,6 +112,7 @@ class SessionScreen(tk.Frame):
 
         self.signer_card = self._build_role_card(
             parent=self.cards_row,
+            role="signer",
             emoji="🤟",
             title="Signer",
             description="I use sign language — translate my signs to text for others",
@@ -119,6 +122,7 @@ class SessionScreen(tk.Frame):
         )
         self.speaker_card = self._build_role_card(
             parent=self.cards_row,
+            role="speaker",
             emoji="🗣️",
             title="Speaker",
             description="I speak or type — translate my words to sign language",
@@ -126,6 +130,11 @@ class SessionScreen(tk.Frame):
             icon_bg="#f8efdf",
             command=lambda: self._set_role_and_navigate("speaker"),
         )
+        self._role_cards = {
+            "signer": self.signer_card,
+            "speaker": self.speaker_card,
+        }
+        self._set_selected_role(getattr(self.state, "user_role", "signer"))
 
         self.join_card = tk.Frame(
             self.content,
@@ -155,7 +164,7 @@ class SessionScreen(tk.Frame):
             self.join_copy,
             text="Enter an ID to join someone else's conversation",
             font=("Helvetica", 11),
-            fg="#9aa3b3",
+            fg=COLORS["text"],
             bg=COLORS["white"],
             justify=tk.LEFT,
         )
@@ -278,7 +287,7 @@ class SessionScreen(tk.Frame):
         if self.scrollbar.winfo_ismapped():
             self.scroll_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
-    def _build_role_card(self, parent, emoji, title, description, border, icon_bg, command):
+    def _build_role_card(self, parent, role, emoji, title, description, border, icon_bg, command):
         card = tk.Frame(
             parent,
             bg=COLORS["white"],
@@ -348,9 +357,14 @@ class SessionScreen(tk.Frame):
         button.place(relx=0, rely=0, relwidth=1, relheight=1)
         button.lower()
 
-        for widget in (card, top_row, icon, arrow):
+        for widget in (card, top_row, icon, arrow, title_label, desc_label):
             widget.bind("<Button-1>", lambda _event, action=command: action())
 
+        card.role = role
+        card.default_border = border
+        card.selected_border = "#45d9f8" if role == "signer" else "#f7c965"
+        card.selected_icon_bg = "#d9f7ff" if role == "signer" else "#fff2db"
+        card.default_icon_bg = icon_bg
         card.icon_label = icon
         card.arrow_label = arrow
         card.title_label = title_label
@@ -365,6 +379,22 @@ class SessionScreen(tk.Frame):
         card.arrow_label.configure(font=("Helvetica", arrow_size, "bold"))
         card.title_label.configure(font=("Helvetica", title_size, "bold"))
         card.desc_label.configure(font=("Helvetica", font_size), wraplength=wraplength)
+
+    def _set_selected_role(self, role: str):
+        if role not in self._role_cards:
+            role = "signer"
+
+        self._selected_role = role
+        for name, card in self._role_cards.items():
+            is_selected = name == role
+            card.configure(
+                highlightbackground=card.selected_border if is_selected else card.default_border,
+                highlightthickness=4 if is_selected else 2,
+            )
+            card.icon_label.configure(bg=card.selected_icon_bg if is_selected else card.default_icon_bg)
+            card.arrow_label.configure(fg=COLORS["teal"] if is_selected else "#d9dee6")
+            card.title_label.configure(fg=COLORS["navy"] if is_selected else COLORS["text_lt"])
+            card.desc_label.configure(fg=COLORS["text"] if is_selected else "#8f9ab0")
 
     def _open_join_dialog(self):
         if self._join_dialog and self._join_dialog.winfo_exists():
@@ -445,33 +475,48 @@ class SessionScreen(tk.Frame):
             return
 
         value = self._join_entry.get().strip()
-        if value:
-            self.state.session_id = value
-            self.status_bar.set_text(f"Status: Ready · {value}")
+        if not value:
+            self.status_bar.set_text("Status: Enter a Meeting ID before continuing")
+            return
+
+        self.state.session_id = value
+        self.status_bar.set_text(f"Status: Ready · {value}")
         self._close_join_dialog()
+
+    def _validate_session_requirements(self, role: str = None):
+        selected_role = role or self._selected_role or getattr(self.state, "user_role", "")
+        if selected_role not in {"signer", "speaker"}:
+            self.status_bar.set_text("Status: Select a role (Signer or Speaker) before continuing")
+            return False, None, None
+
+        meeting_id = getattr(self.state, "session_id", "").strip()
+        if not meeting_id:
+            self.status_bar.set_text("Status: Enter a Meeting ID before continuing")
+            self._open_join_dialog()
+            return False, selected_role, None
+
+        return True, selected_role, meeting_id
 
     def _on_start(self):
         """Start conversation with the entered session ID."""
-        session_id = getattr(self.state, "session_id", "").strip()
-        if session_id:
-            self.state.session_id = session_id
-            # Determine which role to navigate to based on state
-            if self.state.user_role == "signer":
-                self.navigate("signer")
-            elif self.state.user_role == "speaker":
-                self.navigate("speaker")
-            else:
-                # If no role set yet, default to signer
-                self.state.user_role = "signer"
-                self.navigate("signer")
+        is_valid, selected_role, meeting_id = self._validate_session_requirements()
+        if not is_valid:
+            return
+
+        self.state.user_role = selected_role
+        self.state.session_id = meeting_id
+        self.navigate(selected_role)
 
     def _set_role_and_navigate(self, role: str):
         """Set role and navigate to the appropriate screen."""
-        self.state.user_role = role
-        session_id = getattr(self.state, "session_id", "").strip()
-        if session_id:
-            self.state.session_id = session_id
-        self.navigate(role)
+        self._set_selected_role(role)
+        is_valid, selected_role, meeting_id = self._validate_session_requirements(role)
+        if not is_valid:
+            return
+
+        self.state.user_role = selected_role
+        self.state.session_id = meeting_id
+        self.navigate(selected_role)
 
     def on_show(self):
         """Called when screen is shown."""
@@ -479,6 +524,7 @@ class SessionScreen(tk.Frame):
         user = getattr(self.state, "current_user", None)
         name = user["full_name"].split()[0] if user else "there"
         self.kicker.config(text=f"WELCOME BACK {name.upper()} 👋")
+        self._set_selected_role(getattr(self.state, "user_role", "signer"))
         self.status_bar.set_text("Status: Pick a role or join a session")
         self._layout_panels()
 
