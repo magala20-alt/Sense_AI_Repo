@@ -3,7 +3,7 @@
 import tkinter as tk
 from theme import COLORS
 
-
+# this shall connect to the AI-generated avatar in the future, but for now it's a static drawing using canvas primitives to match the mockups.
 class FaceAvatar(tk.Canvas):
     """
     Draws a face avatar using tk.Canvas primitives.

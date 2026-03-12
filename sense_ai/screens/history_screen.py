@@ -1,8 +1,23 @@
 import tkinter as tk
 
+try:
+    from app_state import AppState
+    from components.mobile_nav import MobileNavBar
+    from components.status_bar import StatusBar
+    from components.sidebar import Sidebar
+    from theme import COLORS
+except ModuleNotFoundError:
+    import sys
+    from pathlib import Path
+
+    PROJECT_ROOT = Path(__file__).resolve().parents[1]
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+
 from components.mobile_nav import MobileNavBar
 from components.sidebar import Sidebar
 from components.status_bar import StatusBar
+from app_state import AppState
 from theme import COLORS
 
 
@@ -150,3 +165,15 @@ class HistoryScreen(tk.Frame):
         self._refresh_navigation()
         self._apply_layout()
         self.status_bar.set_text("Status: History ready")
+
+#temp to see view of screen
+# def main():
+#     root = tk.Tk()
+#     root.geometry("400x600")
+#     state = AppState()
+#     history_screen = HistoryScreen(root, state, lambda x: print(f"Navigate to {x}"))
+#     history_screen.pack(fill=tk.BOTH, expand=True)
+#     root.mainloop()
+
+# if __name__ == "__main__":
+#     main()

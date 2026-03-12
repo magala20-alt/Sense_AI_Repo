@@ -1,5 +1,23 @@
+from logging import root
 import tkinter as tk
 
+try:
+    from app_state import AppState
+    from config import BACKEND_WS_URL, CAMERA_INDEX
+    from components.mobile_nav import MobileNavBar
+    from components.status_bar import StatusBar
+    from components.sidebar import Sidebar
+    from services.websocket_client import create_websocket_client
+    from theme import COLORS
+except ModuleNotFoundError:
+    import sys
+    from pathlib import Path
+
+    PROJECT_ROOT = Path(__file__).resolve().parents[1]
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        
+from app_state import AppState
 from components.mobile_nav import MobileNavBar
 from components.sidebar import Sidebar
 from components.status_bar import StatusBar
@@ -124,23 +142,25 @@ class SettingsScreen(tk.Frame):
         self.detection_card.pack_forget()
         self.app_card.pack_forget()
 
-        self.main_area.pack(side=tk.LEFT if mode == "desktop" else tk.TOP, fill=tk.BOTH, expand=True)
-        self.scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
         if mode == "desktop":
             self.desktop_sidebar.pack(side=tk.LEFT, fill=tk.Y)
+            self.main_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            self.scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             self.profile_card.pack(side=tk.LEFT, fill=tk.X, padx=(28, 12), pady=24, anchor="n")
             self.right_stack.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(12, 28), pady=24)
             self.communication_card.pack(fill=tk.X, pady=(0, 16))
             self.detection_card.pack(fill=tk.X, pady=(0, 16))
             self.app_card.pack(fill=tk.X)
         else:
+            self.mobile_nav.pack(side=tk.LEFT, fill=tk.Y)
+            self.main_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            self.scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             self.profile_card.pack(fill=tk.X, padx=22, pady=(18, 14))
             self.communication_card.pack(fill=tk.X, padx=22, pady=(0, 14))
             self.detection_card.pack(fill=tk.X, padx=22, pady=(0, 14))
             self.app_card.pack(fill=tk.X, padx=22, pady=(0, 18))
-            self.mobile_nav.pack(side=tk.BOTTOM, fill=tk.X)
 
     def _on_resize(self, _event):
         self._apply_layout()
@@ -149,3 +169,15 @@ class SettingsScreen(tk.Frame):
         self._refresh_navigation()
         self._apply_layout()
         self.status_bar.set_text("Status: Settings ready")
+
+# temp to start settings screen to see how it looks
+def main():
+        root = tk.Tk()
+        root.geometry("400x600")
+        state = AppState()
+        settings_screen = SettingsScreen(root, state, lambda x: print(f"Navigate to {x}"))
+        settings_screen.pack(fill=tk.BOTH, expand=True)
+        root.mainloop()
+        
+if __name__ == "__main__":
+    main()

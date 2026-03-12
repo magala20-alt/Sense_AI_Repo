@@ -6,25 +6,25 @@ class AppState:
     Pass this object to every screen constructor.
     """
     def __init__(self):
-        self.user_role     = None          # "signer" or "speaker"
-        self.session_id    = None          # conversation session ID string
-        self.current_user  = None          # active signed-in user record
-        self.conv_history  = []            # list of {who, text, grammar_type}
-        self.is_connected  = False         # WebSocket connection status
-        self.current_translation = ""
-        self.current_grammar     = ""
-        self.users = {
-            "demo@sense.ai": {
-                "full_name": "Maya Johnson",
-                "password": "Sense1234",
-            }
-        }
-        self.tier_scores = {
-            "physical": 0,
-            "grammar":  0,
-            "semantic": 0,
-        }
-    
+        self.current_user = None
+        self.session_token = None
+        self.user_role = ""
+        self.session_id = ""
+
+        # backend instance is attached in main.py:
+        # self.state.backend = create_app()
+        self.backend = None
+
+        # conversation history used by signer/speaker screens
+        self.conv_history = []
+
+    def set_authenticated_user(self, user: dict, token: str | None = None):
+        # backend returns username/email; keep UI compatibility
+        if user and "full_name" not in user:
+            user["full_name"] = user.get("username", "User")
+        self.current_user = user
+        self.session_token = token
+
     def add_message(self, who: str, text: str, grammar_type: str = ""):
         """Add a message to conversation history."""
         self.conv_history.append({
@@ -32,38 +32,61 @@ class AppState:
             "text": text,
             "grammar_type": grammar_type
         })
-    
+
     def clear_history(self):
         """Clear conversation history."""
         self.conv_history = []
 
+    # Backward-compatible wrappers for screens still calling old methods
     def register_user(self, full_name: str, email: str, password: str):
-        """Register a new in-memory user. Returns (success, message)."""
-        normalized_email = email.strip().lower()
-        if normalized_email in self.users:
-            return False, "An account with that email already exists."
+        """
+        Register using backend. Returns (success, message).
+        full_name is mapped to username for current backend schema.
+        """
+        if not self.backend:
+            return False, "Backend not initialized."
 
-        self.users[normalized_email] = {
-            "full_name": full_name.strip(),
-            "password": password,
-        }
-        self.current_user = {"email": normalized_email, **self.users[normalized_email]}
-        return True, "Account created successfully."
+        username = (full_name or "").strip() or email.split("@")[0]
+        result = self.backend.register(username=username, email=email, password=password)
+        if not result.get("ok"):
+            return False, result.get("error", "Registration failed.")
+
+        # Auto-login after register
+        login = self.backend.login(username=username, password=password)
+        if login.get("ok"):
+            self.set_authenticated_user(login["user"], login.get("token"))
+            return True, "Account created successfully."
+
+        return True, "Account created. Please log in."
 
     def authenticate_user(self, email: str, password: str):
-        """Authenticate a user. Returns (success, message)."""
-        normalized_email = email.strip().lower()
-        user = self.users.get(normalized_email)
-        if not user:
-            return False, "No account found for that email. Create one first."
-        if user["password"] != password:
-            return False, "Incorrect password. Try again."
+        """
+        Authenticate using backend. Returns (success, message).
+        Existing UI passes email; backend login expects username.
+        We try username = email first, then email-prefix fallback.
+        """
+        if not self.backend:
+            return False, "Backend not initialized."
 
-        self.current_user = {"email": normalized_email, **user}
-        return True, f"Welcome back, {user['full_name'].split()[0]}."
+        candidates = [email.strip(), email.split("@")[0].strip()]
+        for username in candidates:
+            result = self.backend.login(username=username, password=password)
+            if result.get("ok"):
+                self.set_authenticated_user(result["user"], result.get("token"))
+                name = self.current_user.get("full_name", "User").split()[0]
+                return True, f"Welcome back, {name}."
+
+        return False, "Invalid username/email or password."
 
     def logout(self):
         """Clear active user/session state."""
+        if self.backend and self.session_token:
+            try:
+                self.backend.logout(self.session_token)
+            except Exception:
+                pass
+
         self.current_user = None
-        self.user_role = None
-        self.session_id = None
+        self.session_token = None
+        self.user_role = ""
+        self.session_id = ""

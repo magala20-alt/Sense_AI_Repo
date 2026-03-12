@@ -6,14 +6,31 @@ import tkinter as tk
 import cv2
 from PIL import Image, ImageTk
 
-from components.detection_chips import DetectionChips
-from components.grammar_tag import GrammarTag
-from components.mobile_nav import MobileNavBar
-from components.sidebar import Sidebar
-from components.status_bar import StatusBar
-from config import BACKEND_WS_URL, CAMERA_INDEX
-from services.websocket_client import create_websocket_client
-from theme import COLORS
+try:
+    from app_state import AppState
+    from config import BACKEND_WS_URL, CAMERA_INDEX
+    from components.mobile_nav import MobileNavBar
+    from components.status_bar import StatusBar
+    from components.sidebar import Sidebar
+    from components.grammar_tag import GrammarTag
+    from services.websocket_client import create_websocket_client
+    from theme import COLORS
+except ModuleNotFoundError:
+    import sys
+    from pathlib import Path
+
+    PROJECT_ROOT = Path(__file__).resolve().parents[1]
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+
+    from app_state import AppState
+    from config import BACKEND_WS_URL, CAMERA_INDEX
+    from components.mobile_nav import MobileNavBar
+    from components.status_bar import StatusBar
+    from components.sidebar import Sidebar
+    from components.grammar_tag import GrammarTag
+    from services.websocket_client import create_websocket_client
+    from theme import COLORS
 
 
 class SignerScreen(tk.Frame):
@@ -66,7 +83,13 @@ class SignerScreen(tk.Frame):
 
         self.video_stage = tk.Frame(self.video_card, bg="#021632")
         self.video_stage.pack(fill=tk.BOTH, expand=True, padx=18, pady=18)
-        self.camera_label = tk.Label(self.video_stage, bg="#021632")
+        self.camera_label = tk.Label(
+            self.video_stage,
+            bg="#021632",
+            fg=COLORS["white"],
+            text="Starting camera...",
+            font=("Helvetica", 12),
+        )
         self.camera_label.pack(fill=tk.BOTH, expand=True)
         self.video_footer = tk.Frame(self.video_card, bg="#021632")
         self.video_footer.pack(fill=tk.X, padx=16, pady=(0, 14))
@@ -80,14 +103,13 @@ class SignerScreen(tk.Frame):
         self.translation_card = tk.Frame(self.aside, bg=COLORS["white"], highlightbackground="#e2e8ef", highlightthickness=1, padx=18, pady=16)
         self.translation_title = tk.Label(self.translation_card, text='"Are you coming tomorrow?"', font=("Helvetica", 16, "bold"), bg=COLORS["white"], fg=COLORS["navy"], wraplength=280, justify=tk.LEFT)
         self.translation_title.pack(anchor="w")
-        self.translation_meta = tk.Label(self.translation_card, text="Translated · 91% confidence", font=("Helvetica", 11), bg=COLORS["white"], fg="#95a0b2")
+        self.translation_meta = tk.Label(self.translation_card, text="Translated", font=("Helvetica", 11), bg=COLORS["white"], fg="#95a0b2")
         self.translation_meta.pack(anchor="w", pady=(8, 0))
 
         self.conversation_card = tk.Frame(self.aside, bg=COLORS["white"], highlightbackground="#e2e8ef", highlightthickness=1, padx=18, pady=18)
         tk.Label(self.conversation_card, text="CONVERSATION", font=("Helvetica", 12, "bold"), bg=COLORS["white"], fg="#97a2b5").pack(anchor="w", pady=(0, 10))
-        self.chips_frame = DetectionChips(self.conversation_card)
         self.history_frame = tk.Frame(self.conversation_card, bg=COLORS["white"])
-        self.history_frame.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+        self.history_frame.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
 
         self.mobile_nav = MobileNavBar(self, active_screen="signer", navigate=self.navigate, role="signer")
         self.status_bar = StatusBar(self)
@@ -120,12 +142,11 @@ class SignerScreen(tk.Frame):
         self.translation_card.pack_forget()
         self.conversation_card.pack_forget()
 
-        self.main_area.pack(side=tk.LEFT if mode == "desktop" else tk.TOP, fill=tk.BOTH, expand=True)
-        self.scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
         if mode == "desktop":
             self.desktop_sidebar.pack(side=tk.LEFT, fill=tk.Y)
+            self.main_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            self.scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             self.header.pack(fill=tk.X)
             self.mobile_top.pack_forget()
             self.main_row.pack(fill=tk.BOTH, expand=True, padx=28, pady=(16, 28))
@@ -134,6 +155,9 @@ class SignerScreen(tk.Frame):
             self.translation_card.pack(fill=tk.X, pady=(0, 12))
             self.conversation_card.pack(fill=tk.BOTH, expand=True)
         else:
+            self.main_area.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+            self.scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             self.header.pack_forget()
             self.mobile_top.pack(fill=tk.X, pady=(0, 12))
             self.main_row.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 14))
@@ -166,9 +190,6 @@ class SignerScreen(tk.Frame):
             head = tk.Frame(row, bg=COLORS["white"])
             head.pack(anchor="w")
             tk.Label(head, text=author, font=("Helvetica", 10, "bold"), bg=COLORS["white"], fg=label_fg).pack(side=tk.LEFT)
-            grammar = entry.get("grammar_type", "")
-            if grammar:
-                tk.Label(head, text=grammar, font=("Helvetica", 8, "bold"), bg="#efeaff", fg="#6d4ce5", padx=8, pady=2).pack(side=tk.LEFT, padx=(8, 0))
             tk.Label(row, text=entry.get("text", ""), font=("Helvetica", 12), bg=bubble_bg, fg=COLORS["navy"], wraplength=260, justify=tk.LEFT, padx=14, pady=10).pack(fill=tk.X, pady=(4, 0))
 
     def on_show(self):
@@ -184,8 +205,16 @@ class SignerScreen(tk.Frame):
         """Start camera capture in background thread."""
         if self.camera_running:
             return
-        self.camera_running = True
         self.cap = cv2.VideoCapture(CAMERA_INDEX)
+        if not self.cap or not self.cap.isOpened():
+            self.camera_running = False
+            self._update_camera_status(f"Camera unavailable on index {CAMERA_INDEX}")
+            if self.cap:
+                self.cap.release()
+                self.cap = None
+            return
+        self.camera_running = True
+        self._update_camera_status("")
         threading.Thread(target=self._camera_loop, daemon=True).start()
 
     def _camera_loop(self):
@@ -203,8 +232,12 @@ class SignerScreen(tk.Frame):
 
     def _update_camera_display(self, photo):
         self.preview_photo = photo
-        self.camera_label.configure(image=photo)
+        self.camera_label.configure(image=photo, text="")
         self.camera_label.image = photo
+
+    def _update_camera_status(self, message):
+        self.camera_label.configure(image="", text=message)
+        self.camera_label.image = None
 
     def start_websocket(self):
         if self.websocket_client:
@@ -220,13 +253,8 @@ class SignerScreen(tk.Frame):
         self.state.tier_scores = tier_scores
         if translation:
             self.translation_title.config(text=f'"{translation}"')
-        self.translation_meta.config(text=f"Translated · {tier_scores.get('semantic', 0)}% confidence")
+        self.translation_meta.config(text="Translated")
         self.grammar_overlay.update_grammar(grammar_type)
-        self.chips_frame.update_chips(
-            tier_scores.get("physical", 0),
-            tier_scores.get("grammar", 0),
-            tier_scores.get("semantic", 0)
-        )
         if translation:
             self.state.add_message("You", translation, grammar_type)
             self._render_history()
@@ -258,3 +286,16 @@ class SignerScreen(tk.Frame):
                 self.after_cancel(self.pulse_id)
             except Exception:
                 pass
+
+# temp to see view of screen
+# def main():
+#     root = tk.Tk()
+#     root.geometry("400x600")
+#     state = AppState()
+#     signer_screen = SignerScreen(root, state, lambda x: print(f"Navigate to {x}"))
+#     signer_screen.pack(fill=tk.BOTH, expand=True)
+#     signer_screen.on_show()
+#     root.mainloop()
+
+# if __name__ == "__main__":
+#     main()

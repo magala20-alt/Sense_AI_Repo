@@ -37,7 +37,7 @@ class LoginScreen(tk.Frame):
             bg=COLORS["navy"],
             fg=COLORS["white"],
         )
-        self.header_title.place(x=28, y=24, anchor="nw")
+        self.header_title.place(x=28, y=36, anchor="nw")
         self.header_subtitle = tk.Label(
             self.header,
             text="Translate (Signer) · Speak (Speaker)",
@@ -198,6 +198,9 @@ class LoginScreen(tk.Frame):
         self.feedback_label.config(text=message, fg=COLORS["danger"] if is_error else COLORS["teal"])
         self.status_bar.set_text(f"Status: {message}")
 
+    def _set_error(self, message: str):
+        self._set_feedback(message, is_error=True)
+
     def _validate_credentials(self, email: str, password: str):
         if not email or not password:
             return False, "Enter both email and password."
@@ -207,27 +210,25 @@ class LoginScreen(tk.Frame):
 
     def _on_login(self):
         email = self.email_entry.get().strip()
-        password = self.password_entry.get()
+        password = self.password_entry.get().strip()
 
-        is_valid, message = self._validate_credentials(email, password)
-        if not is_valid:
-            self._set_feedback(message)
+        ok, msg = self._validate_credentials(email, password)
+        if not ok:
+            self._set_error(msg)
             return
 
+        # Use AppState wrapper (handles backend and username/email compatibility)
         success, message = self.state.authenticate_user(email, password)
-        if not success:
-            self._set_feedback(message)
-            return
-
-        self._set_feedback(message, is_error=False)
-        self.navigate("session")
+        if success:
+            self._set_feedback(message, is_error=False)
+            self.navigate("session")
+        else:
+            self._set_error(message)
 
     def on_show(self):
         self._apply_layout()
         self.feedback_label.config(text="")
         self.email_entry.delete(0, tk.END)
         self.password_entry.delete(0, tk.END)
-        self.email_entry.insert(0, "demo@sense.ai")
-        self.password_entry.insert(0, "Sense1234")
         self.status_bar.set_live(False)
-        self.status_bar.set_text("Status: Demo login available · demo@sense.ai / Sense1234")
+        self.status_bar.set_text("Status: Enter your account credentials")

@@ -1,6 +1,7 @@
 # components/sidebar.py
 
 import tkinter as tk
+from tkinter import messagebox
 from theme import COLORS, FONTS
 
 
@@ -56,16 +57,23 @@ class Sidebar(tk.Frame):
     tk.Button(footer, text="⎋", font=("Helvetica", 12), bg=COLORS["navy"], fg="#8b97b2", relief=tk.FLAT, bd=0, cursor="hand2", command=self.on_logout).pack(side=tk.RIGHT, padx=18)
 
   def _nav_button(self, screen_name, icon, label, accent):
+    is_locked = (
+      (self.active_screen == "speaker" and screen_name == "signer") or
+      (self.active_screen == "signer" and screen_name == "speaker")
+    )
     is_active = screen_name == self.active_screen
     bg = "#15516e" if is_active else COLORS["navy"]
-    fg = COLORS["white"] if is_active else "#c3cadb"
+    fg = COLORS["white"] if is_active else ("#7f8aa5" if is_locked else "#c3cadb")
     row = tk.Frame(self, bg=bg, height=48)
     row.pack(fill=tk.X, padx=12, pady=4)
     row.pack_propagate(False)
-    tk.Label(row, text=icon, font=("Helvetica", 16), bg=bg, fg=accent if is_active else "#8b97b2").pack(side=tk.LEFT, padx=(18, 12))
+    tk.Label(row, text=icon, font=("Helvetica", 16), bg=bg, fg=accent if is_active else ("#6e7895" if is_locked else "#8b97b2")).pack(side=tk.LEFT, padx=(18, 12))
     tk.Label(row, text=label, font=("Helvetica", 12, "bold"), bg=bg, fg=fg).pack(side=tk.LEFT)
 
     def handle_click(_event=None):
+      if is_locked:
+        messagebox.showinfo("Switch Role", "Go to Settings to switch role.")
+        return
       self.navigate(screen_name)
 
     for widget in (row,):

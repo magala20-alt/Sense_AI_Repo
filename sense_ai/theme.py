@@ -27,7 +27,7 @@ FONTS = {
     "label":      ("Helvetica", 11, "bold"),
     "small":      ("Helvetica", 10),
     "tiny":       ("Helvetica", 9),
-    "status":     ("Courier", 8),
+    "status":     ("Courier", 11),
 }
 
 # Window size

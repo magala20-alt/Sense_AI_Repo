@@ -1,6 +1,8 @@
 # screens/session_screen.py
 
 import tkinter as tk
+import secrets
+import string
 
 try:
     from components.status_bar import StatusBar
@@ -476,12 +478,77 @@ class SessionScreen(tk.Frame):
 
         value = self._join_entry.get().strip()
         if not value:
-            self.status_bar.set_text("Status: Enter a Meeting ID before continuing")
+            self.status_bar.set_text("Status: Ask the Signer for the Meeting ID")
             return
 
         self.state.session_id = value
-        self.status_bar.set_text(f"Status: Ready · {value}")
+        self._register_speaker_join(value)
+        self.status_bar.set_text(f"Status: Joined {value} as Speaker")
         self._close_join_dialog()
+
+        # If user was selecting speaker, continue immediately
+        if (self._selected_role or "").strip() == "speaker":
+            self.state.user_role = "speaker"
+            self.navigate("speaker")
+
+    def _set_role_and_navigate(self, role: str):
+        """Set role and navigate to the appropriate screen."""
+        self._set_selected_role(role)
+        is_valid, selected_role, meeting_id = self._validate_session_requirements(role)
+        if not is_valid:
+            return
+
+        self.state.user_role = selected_role
+        self.state.session_id = meeting_id
+
+        if selected_role == "speaker":
+            self._register_speaker_join(meeting_id)
+
+        self.navigate(selected_role)
+
+    def _generate_meeting_id(self, length: int = 6) -> str:
+        alphabet = string.ascii_uppercase + string.digits
+        return "".join(secrets.choice(alphabet) for _ in range(length))
+
+    def _register_signer_session(self, meeting_id: str):
+        backend = getattr(self.state, "backend", None)
+        if backend and hasattr(backend, "create_meeting_session"):
+            try:
+                backend.create_meeting_session(meeting_id=meeting_id)
+            except Exception:
+                pass
+
+        registry = getattr(self.state, "_session_registry", {})
+        session = registry.get(meeting_id, {})
+        session["speaker_joined"] = session.get("speaker_joined", False)
+        registry[meeting_id] = session
+        self.state._session_registry = registry
+
+    def _register_speaker_join(self, meeting_id: str):
+        backend = getattr(self.state, "backend", None)
+        if backend and hasattr(backend, "join_meeting_session_as_speaker"):
+            try:
+                backend.join_meeting_session_as_speaker(meeting_id=meeting_id)
+                return
+            except Exception:
+                pass
+
+        registry = getattr(self.state, "_session_registry", {})
+        session = registry.get(meeting_id, {})
+        session["speaker_joined"] = True
+        registry[meeting_id] = session
+        self.state._session_registry = registry
+
+    def _speaker_has_joined(self, meeting_id: str) -> bool:
+        backend = getattr(self.state, "backend", None)
+        if backend and hasattr(backend, "is_speaker_joined"):
+            try:
+                return bool(backend.is_speaker_joined(meeting_id=meeting_id))
+            except Exception:
+                pass
+
+        registry = getattr(self.state, "_session_registry", {})
+        return bool(registry.get(meeting_id, {}).get("speaker_joined", False))
 
     def _validate_session_requirements(self, role: str = None):
         selected_role = role or self._selected_role or getattr(self.state, "user_role", "")
@@ -490,8 +557,23 @@ class SessionScreen(tk.Frame):
             return False, None, None
 
         meeting_id = getattr(self.state, "session_id", "").strip()
+
+        if selected_role == "signer":
+            if not meeting_id:
+                meeting_id = self._generate_meeting_id()
+                self.state.session_id = meeting_id
+                self._register_signer_session(meeting_id)
+                self.status_bar.set_text(f"Status: Meeting ID {meeting_id} created. Share it with Speaker.")
+
+            if not self._speaker_has_joined(meeting_id):
+                self.status_bar.set_text(f"Status: Waiting for Speaker to join {meeting_id}")
+                return False, selected_role, meeting_id
+
+            return True, selected_role, meeting_id
+
+        # Speaker path
         if not meeting_id:
-            self.status_bar.set_text("Status: Enter a Meeting ID before continuing")
+            self.status_bar.set_text("Status: Ask the Signer for the Meeting ID")
             self._open_join_dialog()
             return False, selected_role, None
 
@@ -507,17 +589,6 @@ class SessionScreen(tk.Frame):
         self.state.session_id = meeting_id
         self.navigate(selected_role)
 
-    def _set_role_and_navigate(self, role: str):
-        """Set role and navigate to the appropriate screen."""
-        self._set_selected_role(role)
-        is_valid, selected_role, meeting_id = self._validate_session_requirements(role)
-        if not is_valid:
-            return
-
-        self.state.user_role = selected_role
-        self.state.session_id = meeting_id
-        self.navigate(selected_role)
-
     def on_show(self):
         """Called when screen is shown."""
         self.status_bar.set_live(False)
@@ -525,7 +596,12 @@ class SessionScreen(tk.Frame):
         name = user["full_name"].split()[0] if user else "there"
         self.kicker.config(text=f"WELCOME BACK {name.upper()} 👋")
         self._set_selected_role(getattr(self.state, "user_role", "signer"))
-        self.status_bar.set_text("Status: Pick a role or join a session")
+
+        meeting_id = getattr(self.state, "session_id", "").strip()
+        if meeting_id:
+            self.status_bar.set_text(f"Status: Current Meeting ID {meeting_id}")
+        else:
+            self.status_bar.set_text("Status: Signer creates ID · Speaker enters ID")
         self._layout_panels()
 
 # temp to sstart session screen to see how it looks

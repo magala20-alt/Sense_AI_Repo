@@ -13,19 +13,22 @@ from screens.speaker_screen import SpeakerScreen
 from screens.history_screen import HistoryScreen
 from screens.settings_screen import SettingsScreen
 
+# Backend bootstrap (correct import; avoids circular self-import)
+from Backend.main import create_app
+
 
 class SenseAIApp(tk.Tk):
     """Main application window managing screen navigation."""
 
     def __init__(self):
         super().__init__()
-        
+
         # Window setup
         self.title("Sense.AI")
         self.geometry(f"{APP_WIDTH}x{APP_HEIGHT}")
         self.resizable(True, True)
         self.configure(bg=COLORS["cream"])
-        
+
         # Center window on screen
         self.update_idletasks()
         screen_width = self.winfo_screenwidth()
@@ -33,10 +36,16 @@ class SenseAIApp(tk.Tk):
         x = (screen_width - APP_WIDTH) // 2
         y = (screen_height - APP_HEIGHT) // 2
         self.geometry(f"+{x}+{y}")
-        
+
         # Global app state
         self.state = AppState()
-        
+
+        # Initialize backend once for whole app
+        self.backend = create_app()
+
+        # Optional: expose backend through state for screens that read state only
+        setattr(self.state, "backend", self.backend)
+
         # Frame stack for screen management
         self.frames = {}
         self._build_screens()
@@ -54,11 +63,10 @@ class SenseAIApp(tk.Tk):
             HistoryScreen,
             SettingsScreen,
         ]
-        
+
         for ScreenClass in screen_classes:
             frame = ScreenClass(self, self.state, self.show_screen)
             self.frames[frame.SCREEN_NAME] = frame
-            # Place all frames on top of each other
             frame.place(x=0, y=0, relwidth=1, relheight=1)
 
     def show_screen(self, name: str):
@@ -66,17 +74,15 @@ class SenseAIApp(tk.Tk):
         if name not in self.frames:
             print(f"Screen '{name}' not found")
             return
-        
+
         frame = self.frames[name]
-        frame.lift()  # Bring to front
-        
-        # Call on_show hook if it exists
+        frame.lift()
+
         if hasattr(frame, "on_show"):
             frame.on_show()
 
     def on_closing(self):
         """Handle app closing."""
-        # Clean up resources
         for frame in self.frames.values():
             if hasattr(frame, "stop_camera"):
                 frame.stop_camera()
@@ -86,7 +92,6 @@ class SenseAIApp(tk.Tk):
 
 
 def main():
-    """Entry point for the application."""
     app = SenseAIApp()
     app.protocol("WM_DELETE_WINDOW", app.on_closing)
     app.mainloop()

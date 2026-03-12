@@ -3,12 +3,29 @@
 import threading
 import tkinter as tk
 
-from components.mobile_nav import MobileNavBar
-from components.status_bar import StatusBar
-from components.sidebar import Sidebar
-from components.face_avatar import FaceAvatar
-from services.sigml_sender import get_sigml_sender
-from theme import COLORS
+try:
+    from app_state import AppState
+    from components.mobile_nav import MobileNavBar
+    from components.status_bar import StatusBar
+    from components.sidebar import Sidebar
+    from components.face_avatar import FaceAvatar
+    from services.sigml_sender import get_sigml_sender
+    from theme import COLORS
+except ModuleNotFoundError:
+    import sys
+    from pathlib import Path
+
+    PROJECT_ROOT = Path(__file__).resolve().parents[1]
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+
+    from app_state import AppState
+    from components.mobile_nav import MobileNavBar
+    from components.status_bar import StatusBar
+    from components.sidebar import Sidebar
+    from components.face_avatar import FaceAvatar
+    from services.sigml_sender import get_sigml_sender
+    from theme import COLORS
 
 
 class SpeakerScreen(tk.Frame):
@@ -48,7 +65,7 @@ class SpeakerScreen(tk.Frame):
 
         self.hero_row = tk.Frame(self.content, bg=COLORS["cream"])
         self.avatar_card = tk.Frame(self.hero_row, bg=COLORS["navy"], highlightbackground="#21345d", highlightthickness=1, padx=20, pady=20)
-        self.face_avatar = FaceAvatar(self.avatar_card, size=100)
+        self.face_avatar = FaceAvatar(self.avatar_card, size=300)
         self.face_avatar.pack()
         tk.Label(self.avatar_card, text="SIGNING AVATAR", font=("Helvetica", 11, "bold"), bg=COLORS["navy"], fg=COLORS["teal"]).pack(pady=(10, 8))
         self.avatar_phrase_label = tk.Label(self.avatar_card, text='"Yes, I am coming."', font=("Helvetica", 16, "bold"), bg="#2b385a", fg=COLORS["white"], padx=18, pady=10)
@@ -106,12 +123,11 @@ class SpeakerScreen(tk.Frame):
         self.speak_button.pack_forget()
         self.conversation_card.pack_forget()
 
-        self.main_area.pack(side=tk.LEFT if mode == "desktop" else tk.TOP, fill=tk.BOTH, expand=True)
-        self.scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
         if mode == "desktop":
             self.desktop_sidebar.pack(side=tk.LEFT, fill=tk.Y)
+            self.main_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            self.scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             self.header.pack(fill=tk.X)
             self.mobile_top.pack_forget()
             self.hero_row.pack(fill=tk.X, padx=28, pady=(18, 18))
@@ -121,6 +137,9 @@ class SpeakerScreen(tk.Frame):
             self.speak_button.pack(fill=tk.BOTH, expand=True)
             self.conversation_card.pack(fill=tk.BOTH, expand=True, padx=28, pady=(0, 28))
         else:
+            self.main_area.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+            self.scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            self.scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             self.header.pack_forget()
             self.mobile_top.pack(fill=tk.X)
             self.hero_row.pack(fill=tk.X, padx=12, pady=(12, 12))
@@ -134,6 +153,7 @@ class SpeakerScreen(tk.Frame):
     def _on_resize(self, _event):
         self._apply_layout()
 
+# this shall display the last few messages in the conversation history, but for now it shows mock messages to demonstrate the UI. The messages are stored in app state and updated when the user sends a new message or when a new message is received from the signer/avatar.
     def _render_history(self):
         for child in self.history_frame.winfo_children():
             child.destroy()
@@ -190,3 +210,14 @@ class SpeakerScreen(tk.Frame):
         self.text_entry.insert(0, text)
         self.status_bar.set_text("Status: Ready")
         self.text_entry.focus()
+# temp to sstart speaker screen to see how it looks
+# def main():
+#     root = tk.Tk()
+#     root.geometry("400x600")
+#     state = AppState()
+#     speaker_screen = SpeakerScreen(root, state, lambda x: print(f"Navigate to {x}"))
+#     speaker_screen.pack(fill=tk.BOTH, expand=True)
+#     root.mainloop()
+
+# if __name__ == "__main__":
+#     main()
