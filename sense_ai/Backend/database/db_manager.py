@@ -5,6 +5,7 @@ import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import hashlib
 
 from Backend.database.models import (
     CREATE_ASL_TRANSLATION_TABLE,
@@ -16,7 +17,8 @@ from Backend.database.models import (
     ASLTranslation,
     User,
 )
-from utils.encryption import PasswordManager
+from Backend.core.config import APP_CONFIG
+from Backend.utils.encryption import PasswordManager
 
 
 class DBManager:
@@ -42,10 +44,34 @@ class DBManager:
             conn.execute(CREATE_USER_PREFERENCES_TABLE)
             conn.execute(CREATE_MEETING_SESSION_TABLE)
             conn.commit()
+        self._ensure_users_security_columns()
+
+    def _ensure_users_security_columns(self):
+        with self._connect() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+            if "security_question" not in cols:
+                conn.execute(
+                    "ALTER TABLE users ADD COLUMN security_question TEXT NOT NULL DEFAULT ''"
+                )
+            if "security_answer_hash" not in cols:
+                conn.execute(
+                    "ALTER TABLE users ADD COLUMN security_answer_hash TEXT NOT NULL DEFAULT ''"
+                )
+            conn.commit()
+
+    def _hash_security_answer(self, answer: str) -> str:
+        return hashlib.sha256(answer.strip().casefold().encode("utf-8")).hexdigest()
 
     # ─── User Methods ─────────────────────────────────────────────────────────
 
-    def create_user(self, username: str, email: str, password: str) -> Optional[User]:
+    def create_user(
+        self,
+        username: str,
+        email: str,
+        password: str,
+        security_question: str = "",
+        security_answer: str = "",
+    ) -> Optional[User]:
         try:
             password_hash, salt = PasswordManager.hash_password(password)
             with self._connect() as conn:
@@ -54,37 +80,50 @@ class DBManager:
                     INSERT INTO users (username, email, password_hash, salt)
                     VALUES (?, ?, ?, ?)
                     """,
-                    (username, email, password_hash, salt),
+                    (username.strip(), email.strip().lower(), password_hash, salt),
                 )
                 user_id = cur.lastrowid
+
+                if security_question.strip() and security_answer.strip():
+                    conn.execute(
+                        """
+                        UPDATE users
+                        SET security_question = ?, security_answer_hash = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            security_question.strip(),
+                            self._hash_security_answer(security_answer),
+                            user_id,
+                        ),
+                    )
+
                 conn.commit()
 
-            # Create default preferences for new user
             self._create_default_preferences(user_id)
-
             return User(
                 id=user_id,
                 username=username,
-                email=email,
+                email=email.strip().lower(),
                 created_at=datetime.now().isoformat(),
             )
         except sqlite3.IntegrityError:
-            return None  # Username or email already exists
+            return None
 
-    def authenticate_user(self, username: str, password: str) -> Optional[User]:
+    def authenticate_user_by_email(self, email: str, password: str) -> Optional[User]:
         with self._connect() as conn:
             row = conn.execute(
                 """
                 SELECT id, username, email, password_hash, salt, created_at, last_login
-                FROM users WHERE username = ? AND is_active = 1
+                FROM users
+                WHERE lower(email) = ? AND is_active = 1
                 """,
-                (username,),
+                (email.strip().lower(),),
             ).fetchone()
 
             if row and PasswordManager.verify_password(
                 password, row["password_hash"], row["salt"]
             ):
-                # Update last login
                 conn.execute(
                     "UPDATE users SET last_login = ? WHERE id = ?",
                     (datetime.now().isoformat(), row["id"]),
@@ -99,21 +138,46 @@ class DBManager:
                 )
         return None
 
-    def get_user_by_id(self, user_id: int) -> Optional[User]:
+    def get_security_question(self, email: str) -> Optional[str]:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT id, username, email, created_at, last_login FROM users WHERE id = ?",
-                (user_id,),
+                "SELECT security_question FROM users WHERE lower(email) = ?",
+                (email.strip().lower(),),
             ).fetchone()
-            if row:
-                return User(
-                    id=row["id"],
-                    username=row["username"],
-                    email=row["email"],
-                    created_at=row["created_at"],
-                    last_login=row["last_login"],
-                )
-        return None
+            if not row:
+                return None
+            q = (row["security_question"] or "").strip()
+            return q or None
+
+    def verify_security_answer(self, email: str, answer: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT security_answer_hash FROM users WHERE lower(email) = ?",
+                (email.strip().lower(),),
+            ).fetchone()
+            if not row:
+                return False
+            saved = (row["security_answer_hash"] or "").strip()
+            if not saved:
+                return False
+            return saved == self._hash_security_answer(answer)
+
+    def update_password_by_email(self, email: str, new_password: str) -> bool:
+        if not new_password.strip():
+            return False
+
+        password_hash, salt = PasswordManager.hash_password(new_password)
+        with self._connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE users
+                SET password_hash = ?, salt = ?
+                WHERE lower(email) = ?
+                """,
+                (password_hash, salt, email.strip().lower()),
+            )
+            conn.commit()
+            return cur.rowcount > 0
 
     # ─── Session Token Methods ────────────────────────────────────────────────
 
@@ -364,3 +428,54 @@ class DBManager:
             ).fetchone()
 
         return bool(row and row["speaker_joined"] == 1)
+
+
+def _norm(email: str) -> str:
+    return email.strip().lower()
+
+
+def create_user(full_name: str, email: str, password: str, db_path: str | None = None):
+    db_path = db_path or APP_CONFIG["db_path"]
+    key = _norm(email)
+
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (full_name, email, password)
+            VALUES (?, ?, ?)
+            """,
+            ((full_name or "").strip(), key, password),
+        )
+        conn.commit()
+        return True, "Account created successfully."
+    except sqlite3.IntegrityError:
+        return False, "Account already exists."
+    finally:
+        conn.close()
+
+
+def authenticate_user_db(email: str, password: str, db_path: str | None = None):
+    db_path = db_path or APP_CONFIG["db_path"]
+    key = _norm(email)
+
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT full_name, email
+            FROM users
+            WHERE lower(email) = ? AND password = ?
+            """,
+            (key, password),
+        )
+        row = cur.fetchone()
+        if not row:
+            return False, "Invalid email or password.", None
+
+        user = {"full_name": row[0], "email": row[1]}
+        return True, "Login successful.", user
+    finally:
+        conn.close()

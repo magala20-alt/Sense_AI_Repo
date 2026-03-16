@@ -41,7 +41,14 @@ class SpeakerScreen(tk.Frame):
 
         self.bind("<Configure>", self._on_resize)
 
-        self.desktop_sidebar = Sidebar(self, active_screen="speaker", navigate=self.navigate, role="speaker", on_logout=self._logout)
+        self.desktop_sidebar = Sidebar(
+            self,
+            active_screen="speaker",
+            navigate=self.navigate,
+            role="speaker",
+            on_logout=self._logout,
+            state=self.state,
+        )
         self.main_area = tk.Frame(self, bg=COLORS["cream"])
         self.header = tk.Frame(self.main_area, bg=COLORS["cream"], height=70)
         self.header.pack(fill=tk.X)
@@ -153,17 +160,22 @@ class SpeakerScreen(tk.Frame):
     def _on_resize(self, _event):
         self._apply_layout()
 
-# this shall display the last few messages in the conversation history, but for now it shows mock messages to demonstrate the UI. The messages are stored in app state and updated when the user sends a new message or when a new message is received from the signer/avatar.
     def _render_history(self):
         for child in self.history_frame.winfo_children():
             child.destroy()
 
-        messages = self.state.conv_history[-4:] if self.state.conv_history else [
-            {"who": "Signer", "text": "Are you coming tomorrow?"},
-            {"who": "You", "text": "Yes, I'll be there at 3 pm."},
-            {"who": "Signer", "text": "What time exactly?"},
-            {"who": "You", "text": "Three o'clock, room 4B."},
-        ]
+        messages = self.state.conv_history[-4:] if self.state.conv_history else []
+
+        if not messages:
+            tk.Label(
+                self.history_frame,
+                text="No conversations yet",
+                font=("Helvetica", 12, "italic"),
+                bg=COLORS["white"],
+                fg="#97a2b5",
+                pady=12,
+            ).pack(anchor="w")
+            return
 
         for entry in messages:
             author = entry.get("who", "You")
@@ -171,8 +183,24 @@ class SpeakerScreen(tk.Frame):
             label_fg = COLORS["teal"] if author == "You" else COLORS["gold"]
             row = tk.Frame(self.history_frame, bg=COLORS["white"])
             row.pack(fill=tk.X, pady=8)
-            tk.Label(row, text=author, font=("Helvetica", 10, "bold"), bg=COLORS["white"], fg=label_fg).pack(anchor="w")
-            tk.Label(row, text=entry.get("text", ""), font=("Helvetica", 12), bg=bubble_bg, fg=COLORS["navy"], wraplength=520, justify=tk.LEFT, padx=14, pady=10).pack(fill=tk.X, pady=(4, 0))
+            tk.Label(
+                row,
+                text=author,
+                font=("Helvetica", 10, "bold"),
+                bg=COLORS["white"],
+                fg=label_fg,
+            ).pack(anchor="w")
+            tk.Label(
+                row,
+                text=entry.get("text", ""),
+                font=("Helvetica", 12),
+                bg=bubble_bg,
+                fg=COLORS["navy"],
+                wraplength=520,
+                justify=tk.LEFT,
+                padx=14,
+                pady=10,
+            ).pack(fill=tk.X, pady=(4, 0))
 
     def on_show(self):
         self._apply_layout()
@@ -210,6 +238,7 @@ class SpeakerScreen(tk.Frame):
         self.text_entry.insert(0, text)
         self.status_bar.set_text("Status: Ready")
         self.text_entry.focus()
+
 # temp to sstart speaker screen to see how it looks
 # def main():
 #     root = tk.Tk()

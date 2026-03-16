@@ -97,6 +97,10 @@ class SettingsScreen(tk.Frame):
         self.desktop_sidebar = Sidebar(self, active_screen="settings", navigate=self.navigate, role=self.role, on_logout=self._logout)
         self.mobile_nav = MobileNavBar(self, active_screen="settings", navigate=self.navigate, role=self.role)
 
+        # Force next _apply_layout call to repack recreated widgets
+        self._layout_mode = None
+
+
     def _settings_group(self, parent, title, items, danger_last=False):
         card = tk.Frame(parent, bg=COLORS["white"], highlightbackground="#e3e8ef", highlightthickness=1)
         tk.Label(card, text=title, font=("Helvetica", 10, "bold"), bg=COLORS["white"], fg="#8f9aab").pack(anchor="w", padx=18, pady=(14, 8))

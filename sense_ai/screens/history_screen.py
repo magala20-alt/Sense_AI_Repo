@@ -95,6 +95,9 @@ class HistoryScreen(tk.Frame):
         self.desktop_sidebar = Sidebar(self, active_screen="history", navigate=self.navigate, role=self.role, on_logout=self._logout)
         self.mobile_nav = MobileNavBar(self, active_screen="history", navigate=self.navigate, role=self.role)
 
+        # Force next _apply_layout call to repack recreated widgets
+        self._layout_mode = None
+
     def _add_card(self, section, title, meta, summary, tag, turns):
         parent = self.section_frames[section]
         card = tk.Frame(parent, bg=COLORS["white"], highlightbackground="#e3e8ef", highlightthickness=1, padx=18, pady=18)

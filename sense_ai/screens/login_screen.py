@@ -37,7 +37,7 @@ class LoginScreen(tk.Frame):
             bg=COLORS["navy"],
             fg=COLORS["white"],
         )
-        self.header_title.place(x=28, y=36, anchor="nw")
+        self.header_title.place(x=28, y=40, anchor="nw")
         self.header_subtitle = tk.Label(
             self.header,
             text="Translate (Signer) · Speak (Speaker)",
@@ -45,7 +45,7 @@ class LoginScreen(tk.Frame):
             bg=COLORS["navy"],
             fg=COLORS["teal"],
         )
-        self.header_subtitle.place(x=28, y=80, anchor="nw")
+        self.header_subtitle.place(x=28, y=100, anchor="nw")
         self._header_source_image = None
         self._header_photo = None
         self._load_header_image()
@@ -80,8 +80,34 @@ class LoginScreen(tk.Frame):
         self.email_entry.pack(fill=tk.X, padx=32, pady=(0, 12), ipady=8)
 
         tk.Label(self.card, text="PASSWORD", font=FONTS["label"], bg=COLORS["white"], fg=COLORS["muted"]).pack(anchor="w", padx=32, pady=(0, 4))
-        self.password_entry = tk.Entry(self.card, font=FONTS["body"], bg=COLORS["cream"], relief=tk.FLAT, bd=0, highlightbackground=COLORS["border"], highlightthickness=1, show="•")
-        self.password_entry.pack(fill=tk.X, padx=32, pady=(0, 8), ipady=8)
+        self.password_entry = tk.Entry(
+            self.card,
+            font=FONTS["body"],
+            bg=COLORS["cream"],
+            relief=tk.FLAT,
+            bd=0,
+            highlightbackground=COLORS["border"],
+            highlightthickness=1,
+            show="•",
+        )
+        self.password_entry.pack(fill=tk.X, padx=32, pady=(0, 4), ipady=8)
+
+        self._login_show_password = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            self.card,
+            text="Show password",
+            variable=self._login_show_password,
+            command=self._toggle_login_password,
+            bg=COLORS["white"],
+            fg=COLORS["muted"],
+            activebackground=COLORS["white"],
+            activeforeground=COLORS["muted"],
+            selectcolor=COLORS["white"],
+            font=FONTS["small"],
+            relief=tk.FLAT,
+            highlightthickness=0,
+            bd=0,
+        ).pack(anchor="w", padx=32, pady=(0, 8))
 
         self.feedback_label = tk.Label(
             self.card,
@@ -96,7 +122,17 @@ class LoginScreen(tk.Frame):
 
         forgot_frame = tk.Frame(self.card, bg=COLORS["white"])
         forgot_frame.pack(fill=tk.X, padx=32, pady=(0, 8))
-        tk.Label(forgot_frame, text="Forgot password?", font=FONTS["small"], bg=COLORS["white"], fg=COLORS["teal"], cursor="hand2").pack(side=tk.RIGHT)
+
+        self.forgot_password_label = tk.Label(
+            forgot_frame,
+            text="Forgot password?",
+            font=FONTS["small"],
+            bg=COLORS["white"],
+            fg=COLORS["teal"],
+            cursor="hand2",
+        )
+        self.forgot_password_label.pack(side=tk.RIGHT)
+        self.forgot_password_label.bind("<Button-1>", self._open_forgot_password_window)
 
         tk.Button(
             self.card,
@@ -224,6 +260,148 @@ class LoginScreen(tk.Frame):
             self.navigate("session")
         else:
             self._set_error(message)
+
+    def _toggle_login_password(self):
+        self.password_entry.config(show="" if self._login_show_password.get() else "•")
+
+    def _get_security_question(self, email: str):
+        if hasattr(self.state, "get_security_question"):
+            return self.state.get_security_question(email)
+
+        users = getattr(self.state, "users", {})
+        record = users.get(email.lower()) if isinstance(users, dict) else None
+        if isinstance(record, dict):
+            return record.get("security_question")
+        return None
+
+    def _verify_security_answer(self, email: str, answer: str):
+        if hasattr(self.state, "verify_security_answer"):
+            return self.state.verify_security_answer(email, answer)
+
+        users = getattr(self.state, "users", {})
+        record = users.get(email.lower()) if isinstance(users, dict) else None
+        if isinstance(record, dict):
+            saved = str(record.get("security_answer", "")).strip().casefold()
+            return saved and saved == answer.strip().casefold()
+        return False
+
+    def _apply_password_update(self, email: str, new_password: str):
+        if hasattr(self.state, "update_password"):
+            return self.state.update_password(email, new_password)
+
+        users = getattr(self.state, "users", {})
+        if isinstance(users, dict) and email.lower() in users and isinstance(users[email.lower()], dict):
+            users[email.lower()]["password"] = new_password
+            return True, "Password updated. Please sign in."
+        return False, "Could not update password."
+
+    def _open_forgot_password_window(self, _event=None):
+        win = tk.Toplevel(self)
+        win.title("Forgot Password")
+        win.geometry("460x420")
+        win.resizable(False, False)
+        win.transient(self.winfo_toplevel())
+        win.grab_set()
+
+        tk.Label(win, text="Email", font=FONTS["label"]).pack(anchor="w", padx=16, pady=(16, 4))
+        email_entry = tk.Entry(win, font=FONTS["body"])
+        email_entry.insert(0, self.email_entry.get().strip())
+        email_entry.pack(fill=tk.X, padx=16, ipady=6)
+
+        tk.Label(win, text="Security question", font=FONTS["label"]).pack(anchor="w", padx=16, pady=(12, 4))
+        question_lbl = tk.Label(win, text="Enter email, then click Load Question", font=FONTS["small"], justify=tk.LEFT, wraplength=420)
+        question_lbl.pack(anchor="w", padx=16)
+
+        tk.Button(
+            win,
+            text="Load Question",
+            font=FONTS["small"],
+            command=lambda: _load_question(),
+            cursor="hand2",
+        ).pack(anchor="w", padx=16, pady=(8, 0))
+
+        tk.Label(win, text="Answer", font=FONTS["label"]).pack(anchor="w", padx=16, pady=(12, 4))
+        answer_entry = tk.Entry(win, font=FONTS["body"])
+        answer_entry.pack(fill=tk.X, padx=16, ipady=6)
+
+        tk.Label(win, text="New password", font=FONTS["label"]).pack(anchor="w", padx=16, pady=(12, 4))
+        new_pass_entry = tk.Entry(win, font=FONTS["body"], show="•")
+        new_pass_entry.pack(fill=tk.X, padx=16, ipady=6)
+
+        tk.Label(win, text="Confirm password", font=FONTS["label"]).pack(anchor="w", padx=16, pady=(12, 4))
+        confirm_pass_entry = tk.Entry(win, font=FONTS["body"], show="•")
+        confirm_pass_entry.pack(fill=tk.X, padx=16, ipady=6)
+
+        show_reset_pw = tk.BooleanVar(value=False)
+
+        def _toggle_reset_password():
+            mask = "" if show_reset_pw.get() else "•"
+            new_pass_entry.config(show=mask)
+            confirm_pass_entry.config(show=mask)
+
+        tk.Checkbutton(
+            win,
+            text="Show passwords",
+            variable=show_reset_pw,
+            command=_toggle_reset_password,
+            font=FONTS["small"],
+        ).pack(anchor="w", padx=16, pady=(6, 0))
+
+        status_lbl = tk.Label(win, text="", font=FONTS["small"], fg=COLORS["danger"])
+        status_lbl.pack(anchor="w", padx=16, pady=(10, 0))
+
+        def _load_question():
+            email = email_entry.get().strip().lower()
+            if not self.EMAIL_PATTERN.match(email):
+                question_lbl.config(text="Enter a valid email.")
+                return
+            q = self._get_security_question(email)
+            if not q:
+                question_lbl.config(text="No security question configured for this account.")
+                return
+            question_lbl.config(text=q)
+
+        def _submit():
+            email = email_entry.get().strip().lower()
+            answer = answer_entry.get().strip()
+            new_pw = new_pass_entry.get().strip()
+            confirm_pw = confirm_pass_entry.get().strip()
+
+            if not self.EMAIL_PATTERN.match(email):
+                status_lbl.config(text="Enter a valid email.")
+                return
+            if not self._get_security_question(email):
+                status_lbl.config(text="No security question configured for this account.")
+                return
+            if not self._verify_security_answer(email, answer):
+                status_lbl.config(text="Incorrect security answer.")
+                return
+            if len(new_pw) < 6:
+                status_lbl.config(text="Password must be at least 6 characters.")
+                return
+            if new_pw != confirm_pw:
+                status_lbl.config(text="Passwords do not match.")
+                return
+
+            ok, msg = self._apply_password_update(email, new_pw)
+            if ok:
+                self._set_feedback(msg, is_error=False)
+                win.destroy()
+            else:
+                status_lbl.config(text=msg)
+
+        tk.Button(
+            win,
+            text="Update Password",
+            font=FONTS["body_bold"],
+            bg=COLORS["navy"],
+            fg=COLORS["white"],
+            relief=tk.FLAT,
+            command=_submit,
+            cursor="hand2",
+        ).pack(fill=tk.X, padx=16, pady=16, ipady=8)
+
+        self._apply_layout()
 
     def on_show(self):
         self._apply_layout()

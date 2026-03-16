@@ -482,18 +482,33 @@ class SessionScreen(tk.Frame):
             return
 
         self.state.session_id = value
-        self._register_speaker_join(value)
-        self.status_bar.set_text(f"Status: Joined {value} as Speaker")
-        self._close_join_dialog()
 
-        # If user was selecting speaker, continue immediately
+        # Only mark speaker joined if speaker role is selected.
         if (self._selected_role or "").strip() == "speaker":
+            self._register_speaker_join(value)
+            self.status_bar.set_text(f"Status: Joined {value} as Speaker")
+            self._close_join_dialog()
             self.state.user_role = "speaker"
             self.navigate("speaker")
+            return
+
+        # Non-speaker flow: set ID only.
+        self.status_bar.set_text(f"Status: Meeting ID set to {value}")
+        self._close_join_dialog()
 
     def _set_role_and_navigate(self, role: str):
         """Set role and navigate to the appropriate screen."""
+        previous_role = self._selected_role or getattr(self.state, "user_role", "")
+
         self._set_selected_role(role)
+
+        # Persist selected role immediately to avoid stale-role behavior.
+        self.state.user_role = role
+
+        # If switching from speaker -> signer, clear stale meeting ID so signer creates fresh session.
+        if previous_role == "speaker" and role == "signer":
+            self.state.session_id = ""
+
         is_valid, selected_role, meeting_id = self._validate_session_requirements(role)
         if not is_valid:
             return
@@ -520,7 +535,8 @@ class SessionScreen(tk.Frame):
 
         registry = getattr(self.state, "_session_registry", {})
         session = registry.get(meeting_id, {})
-        session["speaker_joined"] = session.get("speaker_joined", False)
+        # Signer creates/owns the session start state; always reset speaker flag.
+        session["speaker_joined"] = False
         registry[meeting_id] = session
         self.state._session_registry = registry
 

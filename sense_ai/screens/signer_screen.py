@@ -51,7 +51,14 @@ class SignerScreen(tk.Frame):
 
         self.bind("<Configure>", self._on_resize)
 
-        self.desktop_sidebar = Sidebar(self, active_screen="signer", navigate=self.navigate, role="signer", on_logout=self._logout)
+        self.desktop_sidebar = Sidebar(
+            self,
+            active_screen="signer",
+            navigate=self.navigate,
+            role="signer",
+            on_logout=self._logout,
+            state=self.state,
+        )
         self.main_area = tk.Frame(self, bg=COLORS["cream"])
 
         self.header = tk.Frame(self.main_area, bg=COLORS["cream"], height=70)
@@ -174,12 +181,18 @@ class SignerScreen(tk.Frame):
         for child in self.history_frame.winfo_children():
             child.destroy()
 
-        messages = self.state.conv_history[-4:] if self.state.conv_history else [
-            {"who": "You", "text": "Are you coming tomorrow?", "grammar_type": "YES_NO_Q"},
-            {"who": "Speaker", "text": "Yes, I'll be there at 3 pm.", "grammar_type": ""},
-            {"who": "You", "text": "What time exactly?", "grammar_type": "WH_Q"},
-            {"who": "Speaker", "text": "Three o'clock, room 4B.", "grammar_type": ""},
-        ]
+        messages = self.state.conv_history[-4:] if self.state.conv_history else []
+
+        if not messages:
+            tk.Label(
+                self.history_frame,
+                text="No conversations yet",
+                font=("Helvetica", 12, "italic"),
+                bg=COLORS["white"],
+                fg="#97a2b5",
+                pady=12,
+            ).pack(anchor="w")
+            return
 
         for entry in messages:
             author = entry.get("who", "You")

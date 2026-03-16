@@ -4,19 +4,23 @@ import tkinter as tk
 from tkinter import messagebox
 from theme import COLORS, FONTS
 
-
+# backend for user info and logout (if needed)
+from app_state import AppState
 class Sidebar(tk.Frame):
   """Desktop navigation sidebar matching the wider mockups."""
 
-  def __init__(self, parent, active_screen, navigate, role="signer", on_logout=None):
+  def __init__(self, parent, active_screen, navigate, role="signer", on_logout=None, state=None):
     super().__init__(parent, bg=COLORS["navy"], width=262)
     self.pack_propagate(False)
     self.navigate = navigate
     self.active_screen = active_screen
     self.role = role
     self.on_logout = on_logout or (lambda: None)
+    self.state = state
 
     accent = COLORS["teal"] if role == "signer" else COLORS["gold"]
+
+    user_name = self._get_user_name()
 
     header = tk.Frame(self, bg=COLORS["navy"], height=86)
     header.pack(fill=tk.X)
@@ -52,7 +56,13 @@ class Sidebar(tk.Frame):
     avatar.pack(side=tk.LEFT, padx=(18, 10), pady=16)
     info = tk.Frame(footer, bg=COLORS["navy"])
     info.pack(side=tk.LEFT, pady=14)
-    tk.Label(info, text="Maya Johnson", font=("Helvetica", 12, "bold"), bg=COLORS["navy"], fg=COLORS["white"]).pack(anchor="w")
+    tk.Label(
+        info,
+        text=user_name,
+        font=("Helvetica", 12, "bold"),
+        bg=COLORS["navy"],
+        fg=COLORS["white"],
+    ).pack(anchor="w")
     tk.Label(info, text=role.capitalize(), font=("Helvetica", 10), bg=COLORS["navy"], fg=accent).pack(anchor="w")
     tk.Button(footer, text="⎋", font=("Helvetica", 12), bg=COLORS["navy"], fg="#8b97b2", relief=tk.FLAT, bd=0, cursor="hand2", command=self.on_logout).pack(side=tk.RIGHT, padx=18)
 
@@ -80,3 +90,9 @@ class Sidebar(tk.Frame):
       widget.bind("<Button-1>", handle_click)
     for child in row.winfo_children():
       child.bind("<Button-1>", handle_click)
+
+  def _get_user_name(self):
+    user = getattr(self.state, "current_user", None)
+    if isinstance(user, dict):
+      return user.get("full_name") or user.get("name") or user.get("username") or "User"
+    return "User"
