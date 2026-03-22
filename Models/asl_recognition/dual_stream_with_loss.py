@@ -1,6 +1,8 @@
-import mindspore.nn as nn
+# import mindspore.nn as nn
+import tensorflow as tf
+from tensorflow.keras import layers
 
-class DualStreamWithLoss(nn.Cell):
+class DualStreamWithLoss(tf.keras.Model):
     def __init__(self, network, loss_fn):
         super().__init__(auto_prefix=False)
         self.network = network

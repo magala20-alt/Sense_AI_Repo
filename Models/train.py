@@ -1,41 +1,32 @@
-# from mindspore.vision.models import resnet18
-import mindspore.nn as nn
-from mindspore import Model
-from mindspore.train.callback import LossMonitor, TimeMonitor
-
-# from asl_recogniton.wlasl_dual_stream_dataset import WLASLDualStreamDataset
+import tensorflow as tf
 from asl_recognition.wlasl_dual_stream_dataset import create_dual_stream_dataset
-from asl_recognition.dual_stream_with_loss import DualStreamWithLoss
 from asl_recognition.dual_stream_temporal_asl import DualStreamTemporalASL
 from asl_recognition.simple_cnn import SimpleCNN
 
 
 train_ds = create_dual_stream_dataset(
-    "dataset/WLASL/train/frames",
-    "dataset/WLASL/train/pose",
-    batch_size=1
-)
-
-val_ds = create_dual_stream_dataset(
-    "dataset/WLASL/val/frames",
-    "dataset/WLASL/val/pose",
+    "../dataset/WLASL/train/frames",
+    "../dataset/WLASL/train/pose",
     batch_size=1,
     shuffle=False
 )
 
-train_ds = train_ds.project(["rgb", "pose", "label"])
-val_ds   = val_ds.project(["rgb", "pose", "label"])
+val_ds = create_dual_stream_dataset(
+    "../dataset/WLASL/val/frames",
+    "../dataset/WLASL/val/pose",
+    batch_size=1,
+    shuffle=False
+)
 
-for batch in train_ds.create_dict_iterator():
+for batch in train_ds.take(1):
     print(batch.keys())
-    print(batch["rgb"].shape)
-    print(batch["pose"].shape)
-    print(batch["label"].shape)
-    break
+    print(tf.shape(batch["rgb"]))
+    print(tf.shape(batch["pose"]))
+    print(tf.shape(batch["label"]))
 
 
-rgb_backbone = SimpleCNN(out_channels=256)
-pose_backbone = SimpleCNN(out_channels=256 )
+rgb_backbone  = SimpleCNN(out_channels=256)
+pose_backbone = SimpleCNN(out_channels=256)
 
 model = DualStreamTemporalASL(
     rgb_backbone=rgb_backbone,
@@ -43,40 +34,37 @@ model = DualStreamTemporalASL(
     num_classes=100
 )
 
-loss_fn = nn.SoftmaxCrossEntropyWithLogits(sparse=True)
-optimizer = nn.Adam(model.trainable_params(), learning_rate=1e-4)
+loss_fn   = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4)
 
-net_with_loss = DualStreamWithLoss(model, loss_fn)
-
-train_small_ds = train_ds.take(8).repeat(1)
-val_small_ds = val_ds.take(2).repeat(1)
-
-net = Model(
-    network=net_with_loss,
-    # loss_fn=loss_fn,
-    optimizer=optimizer
-    # metrics={"acc"}
+model.compile(
+    optimizer=optimizer,
+    loss=loss_fn,
+    metrics=["accuracy"]
 )
-# net = Model(
-#     network=model,
-#     loss_fn=loss_fn,
-#     optimizer=optimizer,
-#     metrics={"acc"},
-#     labels_name="label"
-# )
 
 
-net.train(
-    epoch=2,
-    train_dataset=train_small_ds,
-    # valid_dataset=val_small_ds,
-    callbacks=[LossMonitor(), TimeMonitor()],
-    dataset_sink_mode=False
+def unpack(batch):
+    return (batch["rgb"], batch["pose"]), batch["label"]
+
+train_small_ds = train_ds.take(8).map(unpack)
+val_small_ds   = val_ds.take(2).map(unpack)
+
+
+model.fit(
+    train_small_ds,
+    epochs=2,
+    callbacks=[
+        tf.keras.callbacks.LambdaCallback(
+            on_epoch_end=lambda epoch, logs: print(f"Epoch {epoch+1} — loss: {logs['loss']:.4f}")
+        )
+    ]
 )
+
+metrics = model.evaluate(val_small_ds, return_dict=True)
+print("Validation:", metrics)
+
 
 # Freeze encoders to save memory
-for p in model.rgb_encoder.get_parameters():
-    p.requires_grad = False
-for p in model.pose_encoder.get_parameters():
-    p.requires_grad = False
-
+model.rgb_encoder.trainable  = False
+model.pose_encoder.trainable = False

@@ -1,9 +1,17 @@
 import os
 import cv2
 import numpy as np
-from mindspore.dataset import GeneratorDataset
-import mindspore.nn as nn
-from mindspore import ops
+import tensorflow as tf 
+from tensorflow.keras import layers
+# from tensorflow.keras.layers import Layer
+from tensorflow.data import Dataset
+# tf.data.Dataset.from_generator
+# import tf.keras.layers.Layer
+# import tf.cast
+
+# from mindspore.dataset import GeneratorDataset
+# import mindspore.nn as nn
+# from mindspore import ops
 
 
 class WLASLDualStreamDataset:
@@ -78,33 +86,47 @@ class WLASLDualStreamDataset:
  #rgb_seq, pose_seq, label
     
 def create_dual_stream_dataset(frames_root, pose_root, batch_size=1, shuffle=True):
-    ds = GeneratorDataset(
-        source=WLASLDualStreamDataset(frames_root, pose_root),
-        column_names=["rgb", "pose", "label"],
-        shuffle=shuffle,
-        num_parallel_workers=1
+    dataset_obj = WLASLDualStreamDataset(frames_root, pose_root)
+
+    def generator():
+        for i in range(len(dataset_obj)):
+            rgb, pose, label = dataset_obj[i]
+            yield {"rgb": rgb, "pose": pose, "label": label}
+
+    ds = tf.data.Dataset.from_generator(
+        generator,
+        output_signature={
+            "rgb":   tf.TensorSpec(shape=(16, 112, 112, 3), dtype=tf.float32),
+            "pose":  tf.TensorSpec(shape=(16, 112, 112, 3), dtype=tf.float32),
+            "label": tf.TensorSpec(shape=(),               dtype=tf.int32)
+        }
     )
+
+    if shuffle:
+        ds = ds.shuffle(buffer_size=len(dataset_obj))
+
     return ds.batch(batch_size)
 
+
 train_ds = create_dual_stream_dataset(
-    "dataset/WLASL/train/frames",
-    "dataset/WLASL/train/pose"
+    "../dataset/WLASL/train/frames",
+    "../dataset/WLASL/train/pose"
 )
 
 # test data loading
-print("Number of samples:", train_ds.get_dataset_size())
+print("Number of samples:", tf.data.experimental.cardinality(train_ds))
 
 # inspect one batch
-for batch in train_ds.create_dict_iterator():
-    print("RGB shape:", batch["rgb"].shape)
-    print("Pose shape:", batch["pose"].shape)
-    print("Labels:", batch["label"])
+for batch in train_ds.take(1):
+    print("RGB shape:", tf.shape(batch["rgb"]) )
+    print("Pose shape:", tf.shape(batch["pose"]))
+    print("Labels:", tf.shape(batch["label"]))
     break
 
 # visual check
 import matplotlib.pyplot as plt
 
-for batch in train_ds.create_dict_iterator():
+for batch in train_ds.take(1):
     rgb = batch["rgb"][0]
     pose = batch["pose"][0]
 
@@ -121,8 +143,8 @@ for batch in train_ds.create_dict_iterator():
 
 # confirm class label mapping
 dataset = WLASLDualStreamDataset(
-    "dataset/WLASL/train/frames",
-    "dataset/WLASL/train/pose"
+    "../dataset/WLASL/train/frames",
+    "../dataset/WLASL/train/pose"
 )
 
 print("Number of classes:", len(dataset.label_map))

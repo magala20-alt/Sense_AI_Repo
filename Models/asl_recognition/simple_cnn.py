@@ -25,31 +25,26 @@
 #     def construct(self, x):
 #         return self.features(x)
 
-import mindspore.nn as nn
+import tensorflow as tf
+from tensorflow.keras import layers
 
-
-class SimpleCNN(nn.Cell):
+class SimpleCNN(tf.keras.Model):
     def __init__(self, out_channels=256):
         super().__init__()
 
-        self.features = nn.SequentialCell(
-            nn.Conv2d(3, 64, kernel_size=3, pad_mode="pad", padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
+        self.features = tf.keras.Sequential([
+            layers.Conv2D(64, kernel_size=3, padding='same', activation='relu'),
+            layers.MaxPooling2D(pool_size=2),
 
-            nn.Conv2d(64, 128, kernel_size=3, pad_mode="pad", padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
+            layers.Conv2D(128, kernel_size=3, padding='same', activation='relu'),
+            layers.MaxPooling2D(pool_size=2),
 
-            nn.Conv2d(128, out_channels, kernel_size=3, pad_mode="pad", padding=1),
-            nn.ReLU(),
+            layers.Conv2D(out_channels, kernel_size=3, padding='same', activation='relu'),
 
             # global pooling
-            nn.AdaptiveAvgPool2d((1, 1))
-        )
+            layers.GlobalAveragePooling2D()
+        ])
 
-    def construct(self, x):
-        # x: (B*T, 3, H, W)
-        x = self.features(x)           # (B*T, C, 1, 1)
-        return x.view(x.shape[0], -1)  # (B*T, C)
-
+    def call(self, x):
+        # x: (B*T, H, W, 3) — TF uses channels-last by default
+        return self.features(x)  # (B*T, out_channels)

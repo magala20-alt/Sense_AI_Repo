@@ -1,15 +1,17 @@
-import mindspore.nn as nn
+import tensorflow as tf
+from tensorflow.keras import layers
 
-class TemporalCNN(nn.Cell):
+class TemporalCNN(tf.keras.Model):
     def __init__(self, in_channels=512):
         super().__init__()
-        self.conv1 = nn.Conv1d(in_channels, 256, kernel_size=3, padding=1, pad_mode="pad")
-        self.relu = nn.ReLU()
-        self.pool = nn.AdaptiveAvgPool1d(1)
+        # Conv1D in TF expects (B, T, C), kernel_size=3, 256 filters
+        self.conv1 = layers.Conv1D(filters=256, kernel_size=3, padding='same', activation=None)
+        self.relu = layers.ReLU()
+        self.pool = layers.GlobalAveragePooling1D()
 
-    def construct(self, x):
-        # x: (B, T, C)
-        x = x.transpose(0, 2, 1)   # (B, C, T)
-        x = self.relu(self.conv1(x))
-        x = self.pool(x)
-        return x.squeeze(-1)       # (B, 256)
+    def call(self, x):
+        # x: (B, T, C) — TensorFlow Conv1D expects this format natively
+        x = self.conv1(x)   # (B, T, 256)
+        x = self.relu(x)    # (B, T, 256)
+        x = self.pool(x)    # (B, 256)
+        return x
