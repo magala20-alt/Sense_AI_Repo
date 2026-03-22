@@ -1,0 +1,9 @@
+{
+  "model_name": "ASL_Translator",
+  "input": "English word index (int32)",
+  "output": "ASL gloss index (int32)",
+  "vocab_size": 10000,
+  "embed_dim": 128,
+  "hidden_dim": 256,
+  "inference_notes": "Input is single word index, output is logits over ASL vocabulary. Use argmax to get predicted index, then map to gloss via vocab.json"
+}

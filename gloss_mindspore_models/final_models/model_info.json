@@ -1,0 +1,8 @@
+{
+  "embedding_dim": 128,
+  "encoder_hidden_dim": 256,
+  "decoder_hidden_dim": 512,
+  "vocab_size": 10000,
+  "enc_vocab_size": 10000,
+  "pad_idx": 0
+}
