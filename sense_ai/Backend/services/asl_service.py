@@ -1,5 +1,6 @@
 from typing import Any, Callable, Dict, List, Optional
 
+from core.unified_attention import UnifiedAttentionMechanism
 from database.db_manager import DBManager
 
 
@@ -13,6 +14,7 @@ class ASLService:
         self.db = db
         # Plug in your real ASL model here, falls back to dummy
         self.translator = translator or self._dummy_translator
+        self.attention = UnifiedAttentionMechanism()
 
     def _dummy_translator(self, source: Any, input_type: str) -> Dict[str, Any]:
         return {
@@ -61,12 +63,68 @@ class ASLService:
         """
         try:
             result = self.translator(source, input_type)
+            try:
+                translation = self.db.save_translation(
+                    user_id=user_id,
+                    input_type=input_type,
+                    translated_text=result["translated_text"],
+                    confidence_score=result.get("confidence_score"),
+                    model_used=result.get("model_used"),
+                    input_source=input_source,
+                    duration_seconds=duration_seconds,
+                    session_token=session_token,
+                )
+            except Exception:
+                # Keep real-time translation working even if DB persistence fails
+                # (e.g., guest user id not present in users table).
+                translation = {
+                    "id": None,
+                    "user_id": user_id,
+                    "input_type": input_type,
+                    "translated_text": result.get("translated_text", ""),
+                    "confidence_score": result.get("confidence_score"),
+                    "model_used": result.get("model_used"),
+                    "input_source": input_source,
+                    "duration_seconds": duration_seconds,
+                    "created_at": None,
+                }
+            return {
+                "ok": True,
+                "translation": translation.to_dict() if hasattr(translation, "to_dict") else translation,
+            }
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def get_history(self, user_id: int, limit: int = 50) -> List[Dict[str, Any]]:
+        return self.db.get_translation_history(user_id, limit)
+
+    def translate_multimodal(
+        self,
+        user_id: int,
+        face_output: Dict[str, Any],
+        hand_output: Dict[str, Any],
+        grammar_state: Dict[str, Any],
+        input_type: str = "webcam",
+        input_source: Optional[str] = None,
+        duration_seconds: Optional[float] = None,
+        session_token: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Fuse facial, hand, and grammar model outputs with unified attention,
+        then persist the translation in history.
+        """
+        try:
+            result = self.attention.compute_attention(
+                face_output=face_output,
+                hand_output=hand_output,
+                grammar_state=grammar_state,
+            )
             translation = self.db.save_translation(
                 user_id=user_id,
                 input_type=input_type,
-                translated_text=result["translated_text"],
-                confidence_score=result.get("confidence_score"),
-                model_used=result.get("model_used"),
+                translated_text=result["text"] or "",
+                confidence_score=result.get("confidence"),
+                model_used=f"attention:{result.get('lead_model', 'unknown')}",
                 input_source=input_source,
                 duration_seconds=duration_seconds,
                 session_token=session_token,
@@ -74,12 +132,10 @@ class ASLService:
             return {
                 "ok": True,
                 "translation": translation.to_dict(),
+                "attention": result,
             }
         except Exception as e:
             return {"ok": False, "error": str(e)}
-
-    def get_history(self, user_id: int, limit: int = 50) -> List[Dict[str, Any]]:
-        return self.db.get_translation_history(user_id, limit)
 
     def delete_entry(self, user_id: int, translation_id: int) -> bool:
         return self.db.delete_translation(translation_id, user_id)

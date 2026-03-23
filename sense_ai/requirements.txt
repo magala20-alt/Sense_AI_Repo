@@ -1,4 +1,10 @@
-opencv-python
-pillow
-websockets
-speechrecognition
+opencv-python>=4.5.0
+pillow>=8.0.0
+websockets>=10.0
+speechrecognition>=3.10.0
+numpy>=1.21.0
+mindspore>=2.0.0
+mindspore-serving>=2.0.0
+pyaudio>=0.2.11
+google-cloud-texttospeech>=2.0.0
+

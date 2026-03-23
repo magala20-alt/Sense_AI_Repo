@@ -5,6 +5,7 @@ import tkinter as tk
 
 try:
     from app_state import AppState
+    from config import SIGML_HOST, SIGML_PORT
     from components.mobile_nav import MobileNavBar
     from components.status_bar import StatusBar
     from components.sidebar import Sidebar
@@ -20,6 +21,7 @@ except ModuleNotFoundError:
         sys.path.insert(0, str(PROJECT_ROOT))
 
     from app_state import AppState
+    from config import SIGML_HOST, SIGML_PORT
     from components.mobile_nav import MobileNavBar
     from components.status_bar import StatusBar
     from components.sidebar import Sidebar
@@ -102,7 +104,7 @@ class SpeakerScreen(tk.Frame):
         self.mobile_nav = MobileNavBar(self, active_screen="speaker", navigate=self.navigate, role="speaker")
         self.status_bar = StatusBar(self)
         self.status_bar.set_text("Status: Ready")
-        self.sigml_sender = get_sigml_sender()
+        self.sigml_sender = get_sigml_sender(SIGML_HOST, SIGML_PORT)
 
         self.after_idle(self._apply_layout)
 
@@ -210,33 +212,101 @@ class SpeakerScreen(tk.Frame):
         self.text_entry.focus()
 
     def _on_sign_button(self):
+        """Handle sign button click - translate text to ASL gloss and animate"""
         text = self.text_entry.get().strip()
         if not text or text == "Type your message...":
             return
+        
         self.avatar_phrase_label.config(text=text)
         self.state.add_message("You", text)
         self._render_history()
 
-        def on_done():
-            self.after(0, lambda: self.status_bar.set_text("Status: Ready"))
+        def translate_in_thread():
+            try:
+                # Get model manager and translate
+                from services.model_loader import get_model_manager
+                model_manager = get_model_manager()
+                result = model_manager.translate_text_to_gloss(text)
+                
+                gloss = result.get("gloss", text)
+                confidence = result.get("confidence", 0.0)
+                
+                self.after(0, lambda: self._on_translation_done(gloss, confidence))
+            except Exception as e:
+                self.after(0, lambda: self._on_translation_error(str(e)))
 
-        self.status_bar.set_text("Status: Avatar signing")
-        self.sigml_sender.speak_to_avatar(text, on_done)
+        self.status_bar.set_text("Status: Translating...")
+        threading.Thread(target=translate_in_thread, daemon=True).start()
         self.text_entry.delete(0, tk.END)
 
+    def _on_translation_done(self, gloss: str, confidence: float):
+        """Callback when translation is complete"""
+        self.status_bar.set_text(f"Status: Avatar signing (confidence: {confidence:.1%})")
+        
+        # Update avatar phrase to show the gloss
+        self.avatar_phrase_label.config(text=f"[{gloss}]")
+        
+        def on_sigml_done():
+            self.after(0, lambda: self.status_bar.set_text("Status: Ready"))
+
+        # Preflight connection check gives clear feedback when CWASA is not reachable.
+        if not self.sigml_sender.test_connection():
+            self.status_bar.set_text(
+                f"Status: CWASA offline ({SIGML_HOST}:{SIGML_PORT})"
+            )
+            self.state.add_message("System", "CWASA player not reachable. Start CWASA and retry.")
+            self._render_history()
+            return
+
+        # Send gloss to avatar via SIGML
+        self.sigml_sender.speak_to_avatar(gloss, on_sigml_done)
+
+    def _on_translation_error(self, error: str):
+        """Handle translation error"""
+        self.status_bar.set_text(f"Status: Error - {error}")
+        self.avatar_phrase_label.config(text="[Translation Error]")
+
     def _on_speak_button(self):
-        self.status_bar.set_text("Status: Listening")
-        def mock_speech():
-            import time
-            time.sleep(2)
-            mock_text = "Hello, how are you?"
-            self.after(0, lambda: self._handle_speech_result(mock_text))
-        threading.Thread(target=mock_speech, daemon=True).start()
+        """Handle speech button - record audio and convert to text"""
+        self.status_bar.set_text("Status: Listening for speech...")
+        
+        def record_speech():
+            try:
+                import speech_recognition as sr
+                recognizer = sr.Recognizer()
+                
+                with sr.Microphone() as source:
+                    # Adjust for ambient noise
+                    recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                    # Listen for up to 10 seconds
+                    audio = recognizer.listen(source, timeout=10)
+                
+                # Recognize speech using Google Speech Recognition
+                try:
+                    text = recognizer.recognize_google(audio)
+                    self.after(0, lambda: self._handle_speech_result(text))
+                except sr.UnknownAudioException:
+                    self.after(0, lambda: self._handle_speech_error("Could not understand audio"))
+                except sr.RequestError as e:
+                    self.after(0, lambda: self._handle_speech_error(f"Speech service error: {e}"))
+                    
+            except Exception as e:
+                self.after(0, lambda: self._handle_speech_error(str(e)))
+        
+        threading.Thread(target=record_speech, daemon=True).start()
 
     def _handle_speech_result(self, text: str):
+        """Handle successful speech recognition"""
         self.text_entry.delete(0, tk.END)
         self.text_entry.insert(0, text)
         self.status_bar.set_text("Status: Ready")
+        self.text_entry.focus()
+        # Auto-trigger translation
+        self.after(500, self._on_sign_button)
+
+    def _handle_speech_error(self, error: str):
+        """Handle speech recognition error"""
+        self.status_bar.set_text(f"Status: Speech error - {error}")
         self.text_entry.focus()
 
 # temp to sstart speaker screen to see how it looks

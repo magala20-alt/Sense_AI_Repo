@@ -5,6 +5,7 @@ import websockets
 import json
 import threading
 import time
+import logging
 
 
 class WebSocketClient:
@@ -40,6 +41,9 @@ class WebSocketClient:
         self.connected = False
         self.thread = None
         self.is_demo_mode = False
+        self.loop = None
+        self.websocket = None
+        self.logger = logging.getLogger(__name__)
 
     def start(self):
         """Start WebSocket client in background thread."""
@@ -60,13 +64,24 @@ class WebSocketClient:
         """Main loop running asyncio event loop."""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        self.loop = loop
         
         try:
             loop.run_until_complete(self._connect_and_listen())
         except Exception as e:
             print(f"WebSocket error: {e}")
         finally:
+            self.loop = None
             loop.close()
+
+    def send(self, payload):
+        """Thread-safe send method for UI thread -> websocket thread communication."""
+        if not self.running or not self.connected or self.loop is None or self.websocket is None:
+            raise RuntimeError("WebSocket is not connected")
+
+        message = payload if isinstance(payload, str) else json.dumps(payload)
+        future = asyncio.run_coroutine_threadsafe(self.websocket.send(message), self.loop)
+        return future.result(timeout=2)
 
     async def _connect_and_listen(self):
         """Connect to WebSocket and listen for messages."""
@@ -78,6 +93,7 @@ class WebSocketClient:
                 async with websockets.connect(self.url, ping_interval=20, ping_timeout=10) as websocket:
                     self.connected = True
                     self.is_demo_mode = False
+                    self.websocket = websocket
                     retry_count = 0
                     print(f"Connected to {self.url}")
                     
@@ -87,15 +103,36 @@ class WebSocketClient:
                         
                         try:
                             data = json.loads(message)
-                            translation = data.get("translation", "")
-                            grammar_type = data.get("grammar_type", "")
-                            tier_scores = data.get("tier_scores", {"physical": 0, "grammar": 0, "semantic": 0})
+                            # Supports both legacy format and backend translation_result format.
+                            if data.get("type") == "translation_result":
+                                translation_obj = data.get("translation") or {}
+                                translation = translation_obj.get("translated_text", "")
+                                grammar_type = data.get("grammar_type", "")
+                                confidence = translation_obj.get("confidence_score", 0)
+                                tier_scores = data.get(
+                                    "tier_scores",
+                                    {
+                                        "physical": int((confidence or 0) * 100),
+                                        "grammar": int((confidence or 0) * 100),
+                                        "semantic": int((confidence or 0) * 100),
+                                    },
+                                )
+                            elif data.get("type") == "error":
+                                translation = f"[Server Error] {data.get('error', 'Unknown error')}"
+                                grammar_type = "ERROR"
+                                tier_scores = {"physical": 0, "grammar": 0, "semantic": 0}
+                            else:
+                                translation = data.get("translation", "")
+                                grammar_type = data.get("grammar_type", "")
+                                tier_scores = data.get("tier_scores", {"physical": 0, "grammar": 0, "semantic": 0})
+
                             self.on_message(translation, grammar_type, tier_scores)
                         except json.JSONDecodeError:
                             print(f"Invalid JSON: {message}")
             
             except (ConnectionRefusedError, OSError) as e:
                 self.connected = False
+                self.websocket = None
                 retry_count += 1
                 
                 if retry_count >= max_retries and not self.is_demo_mode:
@@ -110,6 +147,7 @@ class WebSocketClient:
             except Exception as e:
                 print(f"Unexpected error: {e}")
                 self.connected = False
+                self.websocket = None
                 await asyncio.sleep(3)
 
     async def _demo_mode(self):

@@ -4,6 +4,7 @@ import socket
 import threading
 import time
 from typing import List, Optional
+import logging
 
 
 class SiGMLSender:
@@ -26,19 +27,29 @@ class SiGMLSender:
         self.port = port
         self.connected = False
         self.socket = None
+        self.last_error = ""
+        self.logger = logging.getLogger(__name__)
 
     def _connect(self) -> bool:
         """Connect to CWASA player."""
         try:
-            if self.socket is None:
-                self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                self.socket.settimeout(2)
+            # Always recreate socket for a clean connection attempt.
+            if self.socket is not None:
+                try:
+                    self.socket.close()
+                except Exception:
+                    pass
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.settimeout(2)
             self.socket.connect((self.host, self.port))
             self.connected = True
+            self.last_error = ""
             return True
         except Exception as e:
-            print(f"SIGML connection error: {e}")
+            self.last_error = str(e)
+            self.logger.error(f"SIGML connection error ({self.host}:{self.port}): {e}")
             self.connected = False
+            self._disconnect()
             return False
 
     def _disconnect(self):
@@ -54,7 +65,7 @@ class SiGMLSender:
     def send_sigml_text(self, sigml_xml: str) -> bool:
         """Send SiGML XML string to CWASA player."""
         if not self._connect():
-            print("Could not connect to CWASA player")
+            self.logger.error(f"Could not connect to CWASA player at {self.host}:{self.port}")
             return False
         
         try:
@@ -62,9 +73,16 @@ class SiGMLSender:
             self._disconnect()
             return True
         except Exception as e:
-            print(f"Error sending SIGML: {e}")
+            self.last_error = str(e)
+            self.logger.error(f"Error sending SIGML: {e}")
             self._disconnect()
             return False
+
+    def test_connection(self) -> bool:
+        """Lightweight connection check for UI diagnostics."""
+        ok = self._connect()
+        self._disconnect()
+        return ok
 
     def send_sigml_file(self, filepath: str) -> bool:
         """Load .sigml file and send to CWASA player."""

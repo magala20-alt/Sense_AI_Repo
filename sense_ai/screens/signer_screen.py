@@ -1,5 +1,3 @@
-# screens/signer_screen.py
-
 import threading
 import tkinter as tk
 
@@ -14,6 +12,7 @@ try:
     from components.sidebar import Sidebar
     from components.grammar_tag import GrammarTag
     from services.websocket_client import create_websocket_client
+    from services.camera_processor import CameraFrameProcessor, FrameBuffer
     from theme import COLORS
 except ModuleNotFoundError:
     import sys
@@ -30,6 +29,7 @@ except ModuleNotFoundError:
     from components.sidebar import Sidebar
     from components.grammar_tag import GrammarTag
     from services.websocket_client import create_websocket_client
+    from services.camera_processor import CameraFrameProcessor, FrameBuffer
     from theme import COLORS
 
 
@@ -48,6 +48,12 @@ class SignerScreen(tk.Frame):
         self.websocket_client = None
         self.pulse_id = None
         self.preview_photo = None
+        self.display_loop_id = None
+        
+        # Camera frame processor
+        self.frame_processor = None
+        self.frame_buffer = FrameBuffer(max_frames=30)
+        self.translation_update_frequency = 10  # Update translation every 10 frames
 
         self.bind("<Configure>", self._on_resize)
 
@@ -215,22 +221,96 @@ class SignerScreen(tk.Frame):
         self._pulse_status()
 
     def start_camera(self):
-        """Start camera capture in background thread."""
+        """Start camera capture using frame processor."""
         if self.camera_running:
             return
-        self.cap = cv2.VideoCapture(CAMERA_INDEX)
-        if not self.cap or not self.cap.isOpened():
-            self.camera_running = False
-            self._update_camera_status(f"Camera unavailable on index {CAMERA_INDEX}")
-            if self.cap:
-                self.cap.release()
-                self.cap = None
+        
+        try:
+            self.frame_processor = CameraFrameProcessor(camera_index=CAMERA_INDEX, fps=30)
+            self.frame_processor.on_frame_processed = self._on_frame_processed
+            
+            if self.frame_processor.start():
+                self.camera_running = True
+                self.preview_photo = None
+                self._update_camera_status("")
+                if self.display_loop_id is None:
+                    self._camera_display_loop()
+            else:
+                self._update_camera_status("Failed to start camera")
+        except Exception as e:
+            self._update_camera_status(f"Camera error: {str(e)}")
+
+    def _on_frame_processed(self, processed_frame):
+        """Callback when frame is processed by models"""
+        try:
+            # Add to buffer
+            self.frame_buffer.add_frame(processed_frame)
+            
+            # Periodically send to server for translation
+            if processed_frame.frame_id % self.translation_update_frequency == 0:
+                self._send_frame_for_translation(processed_frame)
+        except Exception as e:
+            import logging
+            logging.error(f"Frame processing callback error: {e}")
+
+    def _send_frame_for_translation(self, processed_frame):
+        """Send frame to WebSocket server for translation"""
+        try:
+            if not self.websocket_client:
+                return
+            
+            message = {
+                "type": "translate_frame",
+                "hand_data": processed_frame.hand_data,
+                "facial_data": processed_frame.facial_data,
+                "frame_id": processed_frame.frame_id,
+                "user_id": self.state.current_user.get("id", 1) if self.state.current_user else 1
+            }
+            
+            self.websocket_client.send(message)
+        except Exception as e:
+            import logging
+            logging.error(f"Error sending frame to server: {e}")
+
+    def _camera_display_loop(self):
+        """Update displayed camera frame"""
+        if not self.camera_running or not self.winfo_exists():
+            self.display_loop_id = None
             return
-        self.camera_running = True
-        self._update_camera_status("")
-        threading.Thread(target=self._camera_loop, daemon=True).start()
+        
+        try:
+            latest_frame = self.frame_processor.get_latest_frame()
+            
+            if latest_frame is not None:
+                # Draw keypoints and expression on frame
+                display_frame = latest_frame.frame.copy()
+                display_frame = CameraFrameProcessor.draw_hand_keypoints(display_frame, latest_frame.hand_data)
+                display_frame = CameraFrameProcessor.draw_facial_expression(display_frame, latest_frame.facial_data)
+                
+                # Convert to PhotoImage
+                rgb_frame = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
+                rgb_frame = cv2.resize(rgb_frame, (640, 360))
+                pil_image = Image.fromarray(rgb_frame)
+                if self.preview_photo is None:
+                    self.preview_photo = ImageTk.PhotoImage(pil_image)
+                else:
+                    # Reuse existing Tk image buffer to avoid unbounded allocations.
+                    self.preview_photo.paste(pil_image)
+
+                self.camera_label.configure(image=self.preview_photo, text="")
+                self.camera_label.image = self.preview_photo
+            
+            # Continue looping at ~30fps
+            self.display_loop_id = self.after(40, self._camera_display_loop)
+        except Exception as e:
+            import logging
+            logging.error(f"Display loop error: {e}")
+            # If image buffer is exhausted, reset image object and continue with smaller updates.
+            self.preview_photo = None
+            self.display_loop_id = self.after(120, self._camera_display_loop)
 
     def _camera_loop(self):
+        """Legacy camera loop - kept for compatibility but not used"""
         while self.camera_running:
             ret, frame = self.cap.read() if self.cap else (False, None)
             if not ret:
@@ -274,9 +354,22 @@ class SignerScreen(tk.Frame):
 
     def stop_camera(self):
         self.camera_running = False
+        if self.display_loop_id:
+            try:
+                self.after_cancel(self.display_loop_id)
+            except Exception:
+                pass
+            self.display_loop_id = None
+        if self.frame_processor:
+            self.frame_processor.stop()
+            self.frame_processor = None
         if self.cap:
             self.cap.release()
             self.cap = None
+        self.frame_buffer.clear()
+        self.preview_photo = None
+        self.camera_label.configure(image="")
+        self.camera_label.image = None
 
     def stop_websocket(self):
         if self.websocket_client:
