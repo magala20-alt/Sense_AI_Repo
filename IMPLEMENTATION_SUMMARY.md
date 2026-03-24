@@ -247,7 +247,7 @@ Response: {
 | Component           | Latency  | FPS | Notes                   |
 | ------------------- | -------- | --- | ----------------------- |
 | Hand Detection      | 10-15ms  | 30  | ~21 keypoints per frame |
-| Facial Detection    | 8-10ms   | 30  | 7 emotion classes       |
+| Facial Detection    | 8-10ms   | 30  | 9 emotion classes       |
 | ASL Translation     | 5-20ms   | N/A | Text dependent          |
 | Total Frame->Server | ~30-40ms | 30  | With queue buffering    |
 | WebSocket Overhead  | 5-10ms   | N/A | Per message             |
