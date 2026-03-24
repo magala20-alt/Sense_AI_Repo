@@ -64,7 +64,8 @@ Top-level folders and files you will use most:
 
 - `sense_ai/`: desktop app, screens, services, config, backend package.
 - `sense_ai/Backend/`: WebSocket server, data layer, DB manager, service logic.
-- `gloss_mindspore_models/`: ASL translator and facial model assets plus vocab.
+- `gloss_mindspore_models/`: ASL translator  plus vocab.
+- `facial_recognition_model/`: facial recognition model
 - `hand_recognition_model/`: hand pose model asset.
 - `MODEL_INTEGRATION_GUIDE.md`: detailed model integration reference.
 - `IMPLEMENTATION_SUMMARY.md`: integration status and architecture summary.
@@ -87,7 +88,7 @@ Ensure these files exist before full integration testing:
 ```text
 gloss_mindspore_models/final_models (.mindir)/asl_translator.mindir
 gloss_mindspore_models/final_models/vocab.json
-gloss_mindspore_models/facial_recognition_model/FacialExpressionModel.mindir
+/facial_recognition_model/FacialExpressionModel.mindir
 hand_recognition_model/hand_recognition_model.mindir
 ```
 
